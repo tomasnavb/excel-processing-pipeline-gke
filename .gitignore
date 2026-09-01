@@ -64,3 +64,6 @@ Thumbs.db
 *.log
 tmp/
 *.tmp
+
+# --- Claude Code ---
+CLAUDE.md
