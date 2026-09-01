@@ -1,0 +1,66 @@
+# --- Terraform ---
+**/.terraform/*
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!example.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# --- GCP / credentials ---
+# NOTE: no ignoramos *.json en bloque porque firestore.indexes.json
+# (config de indices compuestos) debe versionarse.
+gcp-key*.json
+service-account*.json
+*-key.json
+*-credentials.json
+application_default_credentials.json
+.env
+.env.*
+!.env.example
+
+# --- Python (api/, processor/) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# --- Docker ---
+*.pid
+
+# --- Kubernetes / Kustomize ---
+kustomization.local.yaml
+*.local.yaml
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Logs / temp ---
+*.log
+tmp/
+*.tmp
