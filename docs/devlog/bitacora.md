@@ -295,15 +295,28 @@ dev/prod (una vez que el proyecto semilla exista) va a vivir en
 org/folder — se trató como una sola responsabilidad ("todo lo que es meta a
 nivel organización") en vez de separarlo en un directorio aparte.
 
-## 14. Setup inicial del proyecto semilla (seed project) de GCP
+## 14. Setup inicial de los proyectos bootstrap y shared de GCP
 
 Con el dominio comprado, Cloud Identity activada y la Organización ya creada
-(prerequisito que había quedado bloqueado en el punto 13), se creó a mano el
-proyecto semilla descrito en ese mismo punto: el único propósito de este
-proyecto es alojar más adelante el Workload Identity Pool/Provider y la
-Service Account que Terraform va a impersonar para gestionar el resto de la
-organización (folders, proyectos dev/prod). No aloja ninguna carga de
-trabajo de la aplicación.
+(prerequisito que había quedado bloqueado en el punto 13), se crearon a mano
+dos folders con un propósito bien distinto cada uno, en vez de agrupar todo
+en un único folder de "gestión":
+
+- **`bootstrap`**, con el proyecto semilla (`excel-pipeline-seed`) adentro:
+  aloja únicamente el Workload Identity Pool/Provider y la Service Account
+  que Terraform va a impersonar para gestionar el resto de la organización
+  (folders, proyectos dev/prod). Es un "root of trust" — sostiene permisos a
+  nivel Organización, así que conviene mantenerlo aislado y de bajo tráfico
+  para que sea fácil de auditar.
+- **`shared`**, con el proyecto `excel-pipeline-shared` adentro: aloja
+  recursos compartidos entre dev y prod — el primer caso concreto es
+  Artifact Registry (`excel-pipeline-images`), para poder construir una
+  imagen una sola vez y promoverla entre entornos sin duplicarla. Se decidió
+  como proyecto aparte (ni dev, ni prod, ni el de bootstrap) para no romper
+  el aislamiento entre dev/prod, y para no mezclar un recurso de tráfico
+  constante con el proyecto más sensible del setup.
+
+Ninguno de los dos aloja carga de trabajo de la aplicación.
 
 Pasos ejecutados — variables de entorno con valores de ejemplo, después la
 secuencia de comandos:
@@ -312,32 +325,44 @@ secuencia de comandos:
 # Variables de entorno (valores de ejemplo — reemplazar por los propios)
 export ORG_ID="123456789012"
 export ADMIN_USER="admin@example.dev"
-export SEED_FOLDER_NAME="seed-projects"
+export BOOTSTRAP_FOLDER_NAME="bootstrap"
 export SEED_PROJECT_ID="excel-pipeline-seed"
+export SHARED_FOLDER_NAME="shared"
+export SHARED_PROJECT_ID="excel-pipeline-shared"
 export REGION="europe-west9"
 
 # Otorgar al usuario administrador permiso para crear folders a nivel
-# organización (necesario antes de poder crear el folder semilla)
+# organización (necesario antes de poder crear los folders)
 gcloud organizations add-iam-policy-binding "$ORG_ID" \
   --member="user:$ADMIN_USER" \
   --role="roles/resourcemanager.folderAdmin"
 
-# Crear un folder dedicado para alojar el proyecto semilla
-gcloud resource-manager folders create \
-  --display-name="$SEED_FOLDER_NAME" \
-  --organization="$ORG_ID"
+# --- Folder bootstrap + proyecto semilla ---
+BOOTSTRAP_FOLDER_NAME_FULL=$(gcloud resource-manager folders create \
+  --display-name="$BOOTSTRAP_FOLDER_NAME" \
+  --organization="$ORG_ID" \
+  --format="value(name)")
+BOOTSTRAP_FOLDER_ID="${BOOTSTRAP_FOLDER_NAME_FULL#folders/}"
 
-# Tomar el folder ID devuelto por el comando anterior
-export SEED_FOLDER_ID="<folder-id-obtenido-arriba>"
-
-# Crear el proyecto semilla dentro de ese folder
 gcloud projects create "$SEED_PROJECT_ID" \
-  --folder="$SEED_FOLDER_ID" \
+  --folder="$BOOTSTRAP_FOLDER_ID" \
   --name="excel-pipeline-seed-project" \
   --labels=type=seed-project
 
-# Crear una configuración de gcloud CLI dedicada, para no operar
-# accidentalmente sobre otro proyecto/contexto
+# --- Folder shared + proyecto compartido ---
+SHARED_FOLDER_NAME_FULL=$(gcloud resource-manager folders create \
+  --display-name="$SHARED_FOLDER_NAME" \
+  --organization="$ORG_ID" \
+  --format="value(name)")
+SHARED_FOLDER_ID="${SHARED_FOLDER_NAME_FULL#folders/}"
+
+gcloud projects create "$SHARED_PROJECT_ID" \
+  --folder="$SHARED_FOLDER_ID" \
+  --name="excel-pipeline-shared-project" \
+  --labels=type=shared-project
+
+# Crear una configuración de gcloud CLI dedicada para el proyecto semilla,
+# para no operar accidentalmente sobre otro proyecto/contexto
 gcloud config configurations create excel-pipeline-seed
 gcloud config set project "$SEED_PROJECT_ID"
 gcloud config set compute/region "$REGION"
@@ -346,9 +371,12 @@ gcloud config set compute/region "$REGION"
 gcloud config configurations describe excel-pipeline-seed
 ```
 
-Quedan pendientes, sobre este mismo proyecto: crear el Workload Identity
+Quedan pendientes: sobre el proyecto semilla, crear el Workload Identity
 Pool + Provider, la Service Account que Terraform va a impersonar, y los
-bindings de IAM a nivel Organización descritos en el punto 13.
+bindings de IAM a nivel Organización descritos en el punto 13; sobre el
+proyecto shared, crear el propio Artifact Registry y los bindings de IAM
+cross-project que le den lectura a los service accounts de GKE en dev y
+prod.
 
 ---
 
