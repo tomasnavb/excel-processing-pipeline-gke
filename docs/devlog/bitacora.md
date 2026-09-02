@@ -215,6 +215,86 @@ variables/outputs, y en el futuro código de `api/`/`processor/`) se escribe
 en **inglés**. La documentación de proceso, como esta bitácora, queda en
 español por ahora.
 
+## 11. Cómo llegan las variables a un workspace VCS-driven
+
+Surgió la duda de cómo evitar repetir `-var`/`-var-file` en cada plan/apply,
+y cómo pasar variables si el workflow es VCS-driven.
+
+**Aclaración conceptual:** `-var`/`-var-file` son flags de una invocación
+manual del CLI — no existen como concepto en un workspace VCS-driven, porque
+ahí nunca se corre `terraform` a mano; un push dispara el run automáticamente.
+Lo que sí ocurre en cada run remoto es que HCP Terraform arma el entorno de
+ejecución leyendo automáticamente todas las Terraform Variables y Environment
+Variables asociadas a esa workspace — las cargadas directo, más las heredadas
+de cualquier Variable Set attacheado a la workspace o a su proyecto. Es un
+mecanismo de "cargar una vez, se propaga solo en cada run futuro", no algo
+que se repita manualmente.
+
+Aplicado a las credenciales WIF de GCP: un `tfe_variable_set` por proyecto
+(uno para dev, otro para prod), attacheado al proyecto entero vía
+`tfe_project_variable_set` — así las 4 workspaces de dominio de cada entorno
+heredan las mismas credenciales sin configurarlas una por una, y cualquier
+workspace nueva que se agregue a ese proyecto las hereda automáticamente.
+
+**Punto que generó confusión:** los valores reales que van dentro de esas
+`tfe_variable` (project number, workload provider ID, etc.) necesitan
+proveerse igual la primera vez — pero no vía `-var`, sino como Terraform
+Variables cargadas a mano, una sola vez, en la propia workspace
+`excel-pipeline-hcp-mgmt` (la que ejecuta el código que crea esos variable
+sets). De ahí en más, quedan persistidas del lado de HCP Terraform y se
+propagan solas a cada workspace de dominio en cada run futuro.
+
+## 12. Variables de dynamic credentials para GCP — verificación
+
+Se verificó contra la documentación oficial de HashiCorp la lista completa de
+variables de entorno necesarias para dynamic credentials con el provider de
+GCP (había una faltante en lo discutido hasta ese momento):
+
+| Variable | Valor |
+|---|---|
+| `TFC_GCP_PROVIDER_AUTH` | `"true"` |
+| `TFC_GCP_PRINCIPAL_TYPE` | `"service_account"` |
+| `TFC_GCP_PROJECT_NUMBER` | project number (no el project ID) donde vive el pool |
+| `TFC_GCP_WORKLOAD_POOL_ID` | ID del workload identity pool |
+| `TFC_GCP_WORKLOAD_PROVIDER_ID` | ID del provider dentro del pool |
+| `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL` | email de la Service Account a impersonar |
+
+Todas van como categoría **Environment Variable** (las lee el provider
+`google` directo del entorno del proceso, no vía `var.x`).
+
+## 13. El problema de bootstrap de GCP (proyecto semilla)
+
+Apareció un tercer caso del mismo patrón de huevo-y-gallina, ahora en la capa
+de GCP: para crear los proyectos dev/prod y la organización con Terraform sin
+usar keys estáticas, hace falta WIF — pero el pool/provider de WIF vive
+*dentro de un proyecto de GCP que ya tiene que existir*, y ese proyecto no
+puede ser dev ni prod porque son justamente los que todavía no existen.
+
+**Decisión:** un proyecto semilla/bootstrap de GCP, creado a mano (con
+usuario humano, no Terraform), que aloja únicamente:
+- El Workload Identity Pool + Provider.
+- Una Service Account (ej. `terraform-admin-sa`) que Terraform impersona.
+
+La clave del mecanismo: dónde vive la Service Account (el proyecto semilla)
+y qué permisos tiene son cosas separadas. Los permisos reales para crear
+folders y proyectos se le otorgan a esa SA con bindings de IAM **a nivel
+Organización** (`roles/resourcemanager.folderCreator`,
+`roles/resourcemanager.projectCreator`, `roles/billing.user` sobre la cuenta
+de facturación) — no a nivel del proyecto semilla. El binding
+`roles/iam.workloadIdentityUser` restringe además qué workspace específica
+puede impersonar esa SA.
+
+Los pasos de creación del dominio, la Organización (Cloud Identity), el
+proyecto semilla, la SA y sus bindings de IAM son manuales — mismo motivo que
+en los puntos 4 y 5: no se puede usar WIF para crear la identidad que WIF
+necesita para autenticarse. Esto queda bloqueado hasta comprar el dominio.
+
+**Decisión de ubicación:** el código que crea los folders y los proyectos
+dev/prod (una vez que el proyecto semilla exista) va a vivir en
+`terraform/platform/governance/`, junto con los bindings de IAM a nivel
+org/folder — se trató como una sola responsabilidad ("todo lo que es meta a
+nivel organización") en vez de separarlo en un directorio aparte.
+
 ---
 
 ## Lecciones aprendidas
@@ -241,3 +321,10 @@ español por ahora.
   GitHub; "environment variable" vs. "Terraform variable"). Cuando algo no
   cierra, vale la pena describir literalmente lo que se ve en pantalla en vez
   de asumir a qué concepto corresponde.
+- **Verificar contra documentación oficial los nombres exactos de una
+  integración externa, en vez de confiar en la memoria.** Al listar las
+  variables de dynamic credentials para GCP apareció una faltante
+  (`TFC_GCP_PRINCIPAL_TYPE`) que no se había mencionado antes. Un nombre de
+  variable mal recordado no rompe en el momento de escribir el código — rompe
+  en silencio en el primer run, con un error de autenticación difícil de
+  distinguir de un problema de permisos real.
