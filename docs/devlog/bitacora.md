@@ -295,6 +295,61 @@ dev/prod (una vez que el proyecto semilla exista) va a vivir en
 org/folder — se trató como una sola responsabilidad ("todo lo que es meta a
 nivel organización") en vez de separarlo en un directorio aparte.
 
+## 14. Setup inicial del proyecto semilla (seed project) de GCP
+
+Con el dominio comprado, Cloud Identity activada y la Organización ya creada
+(prerequisito que había quedado bloqueado en el punto 13), se creó a mano el
+proyecto semilla descrito en ese mismo punto: el único propósito de este
+proyecto es alojar más adelante el Workload Identity Pool/Provider y la
+Service Account que Terraform va a impersonar para gestionar el resto de la
+organización (folders, proyectos dev/prod). No aloja ninguna carga de
+trabajo de la aplicación.
+
+Pasos ejecutados — variables de entorno con valores de ejemplo, después la
+secuencia de comandos:
+
+```bash
+# Variables de entorno (valores de ejemplo — reemplazar por los propios)
+export ORG_ID="123456789012"
+export ADMIN_USER="admin@example.dev"
+export SEED_FOLDER_NAME="seed-projects"
+export SEED_PROJECT_ID="excel-pipeline-seed"
+export REGION="europe-west9"
+
+# Otorgar al usuario administrador permiso para crear folders a nivel
+# organización (necesario antes de poder crear el folder semilla)
+gcloud organizations add-iam-policy-binding "$ORG_ID" \
+  --member="user:$ADMIN_USER" \
+  --role="roles/resourcemanager.folderAdmin"
+
+# Crear un folder dedicado para alojar el proyecto semilla
+gcloud resource-manager folders create \
+  --display-name="$SEED_FOLDER_NAME" \
+  --organization="$ORG_ID"
+
+# Tomar el folder ID devuelto por el comando anterior
+export SEED_FOLDER_ID="<folder-id-obtenido-arriba>"
+
+# Crear el proyecto semilla dentro de ese folder
+gcloud projects create "$SEED_PROJECT_ID" \
+  --folder="$SEED_FOLDER_ID" \
+  --name="excel-pipeline-seed-project" \
+  --labels=type=seed-project
+
+# Crear una configuración de gcloud CLI dedicada, para no operar
+# accidentalmente sobre otro proyecto/contexto
+gcloud config configurations create excel-pipeline-seed
+gcloud config set project "$SEED_PROJECT_ID"
+gcloud config set compute/region "$REGION"
+
+# Verificar
+gcloud config configurations describe excel-pipeline-seed
+```
+
+Quedan pendientes, sobre este mismo proyecto: crear el Workload Identity
+Pool + Provider, la Service Account que Terraform va a impersonar, y los
+bindings de IAM a nivel Organización descritos en el punto 13.
+
 ---
 
 ## Lecciones aprendidas
