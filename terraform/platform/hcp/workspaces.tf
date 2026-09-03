@@ -17,3 +17,24 @@ resource "tfe_workspace" "domain" {
     "terraform/modules/**",
   ]
 }
+
+# Not self-managed: this resource is created by excel-pipeline-hcp-mgmt,
+# a different workspace than the one it defines, so there's no
+# self-destroy risk.
+resource "tfe_workspace" "governance" {
+  name              = "excel-pipeline-governance-mgmt"
+  organization      = var.organization
+  project_id        = data.tfe_project.mgmt.id
+  working_directory = "terraform/platform/governance"
+  auto_apply        = false
+
+  vcs_repo {
+    identifier     = var.vcs_repo_identifier
+    oauth_token_id = tfe_oauth_client.github.oauth_token_id
+  }
+
+  trigger_patterns = [
+    "terraform/platform/governance/**",
+    "terraform/modules/**",
+  ]
+}
