@@ -1,6 +1,6 @@
 output "project_ids" {
   description = "IDs of the dev and prod HCP Terraform projects"
-  value       = local.projects
+  value       = { for env, project in tfe_project.environments : env => project.id }
 }
 
 output "workspace_ids" {
