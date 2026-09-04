@@ -378,6 +378,167 @@ proyecto shared, crear el propio Artifact Registry y los bindings de IAM
 cross-project que le den lectura a los service accounts de GKE en dev y
 prod.
 
+## 15. Workspace de governance agregada al código de `hcp`
+
+`workspaces.tf` solo tenía el `for_each` de las 8 workspaces de dominio —
+faltaba `excel-pipeline-governance-mgmt`, la que va a aplicar
+`terraform/platform/governance/`. Se agregó como un recurso `tfe_workspace`
+aparte (no dentro del `for_each` de dominios, porque no es un dominio), en
+el proyecto mgmt.
+
+Para ubicarla en ese proyecto sin volver a caer en el problema de
+auto-gestión del punto 4, se agregó `data "tfe_project" "mgmt"` — lee el
+proyecto mgmt (creado a mano) por nombre, sin importarlo al state. No hay
+riesgo de auto-destrucción acá porque quien aplica este código
+(`hcp-mgmt`) no es el mismo objeto que se está creando (`governance-mgmt`)
+— el riesgo de auto-gestión es específico a una workspace pudiendo
+gestionarse *a sí misma*, no a que gestione a otras dentro del mismo
+proyecto.
+
+## 16. Refactor a creación dinámica de proyectos — bugs encontrados
+
+Se cambió `projects.tf` de dos recursos nombrados (`tfe_project.dev`,
+`tfe_project.prod`) a uno solo con `for_each`. El primer intento tenía tres
+errores de sintaxis:
+
+1. **Dependencia circular:** `local.projects` se usaba a la vez como
+   *input* del `for_each` (qué proyectos crear) y como *output* (un mapa
+   construido a partir de esos mismos proyectos ya creados) — Terraform no
+   puede resolver eso, es un ciclo. Se resolvió separando los dos
+   conceptos: `local.environments = toset(["dev", "prod"])` como input
+   estático (no depende de nada), y referencias directas a
+   `tfe_project.environments[key].id` donde antes se usaba el local
+   circular.
+2. **Referencias rotas:** `locals.tf` seguía apuntando a
+   `tfe_project.dev`/`.prod`, que ya no existían tras el rename a
+   `tfe_project.environments`.
+3. **Mal uso de splat con `for_each`:** en `variable_sets.tf`,
+   `tfe_project_variable_set` intentaba usar `tfe_project.environments[*].id`
+   (splat, válido solo con `count`) para vincular *todos* los proyectos con
+   *todos* los variable sets a la vez — pero ese recurso vincula uno a uno.
+   Se corrigió agregándole su propio `for_each = local.environments`, para
+   que cada entorno se empareje con su propio variable set por clave.
+
+## 17. Quién escribe los valores reales de las variable sets
+
+Al ir a poblar los `tfe_variable` con los valores `TFC_GCP_*` de dev/prod,
+surgió la pregunta de cómo traerlos si los proyectos dev/prod (y su WIF
+interno) todavía no existen.
+
+**Aclaración de fondo:** no es un problema de "cómo leer el dato" — es que
+el dato no existe todavía, y además `hcp` no tiene ningún acceso a GCP (ni
+siquiera para un `data` block) porque esa workspace solo habla con la API
+de HCP Terraform, por diseño. Ni con `data` ni de ninguna otra forma puede
+`hcp` resolver esto.
+
+**División de responsabilidad, entonces:**
+- `hcp` crea únicamente el *contenedor* vacío: `tfe_variable_set` +
+  `tfe_project_variable_set` (esto ya estaba bien, no requirió cambios).
+- `governance` es quien va a escribir los `tfe_variable` con los valores
+  reales — porque es la única workspace con acceso a GCP en este punto de
+  la cadena, y porque va a ser ella misma quien cree el WIF interno de
+  cada proyecto (los referencia directo como atributos de sus propios
+  `resource`, sin necesitar `data`). Para poder escribir en el variable set
+  que `hcp` ya creó (que no le pertenece en su propio state),
+  `governance` lo referencia con `data "tfe_variable_set"`, y necesita un
+  segundo provider (`tfe`, además de `google`) con su propio `TFE_TOKEN`
+  para poder hablar con la API de HCP Terraform.
+
+Se evaluó también usar `data` para traer valores del proyecto **bootstrap**
+hacia `governance` (en vez de a los proyectos dev/prod) — mismo problema:
+`governance` necesita estar ya autenticado contra GCP para poder ejecutar
+*cualquier* `data` block, así que no resuelve el huevo-y-gallina, solo lo
+mueve un paso.
+
+## 18. WIF del proyecto bootstrap — cuarta instancia del mismo patrón
+
+Para que `governance-mgmt` pueda autenticarse contra GCP necesita el WIF
+del proyecto bootstrap ya configurado — pero configurarlo con Terraform
+requeriría que `governance-mgmt` ya tuviera esa autenticación, que es
+justo lo que se está creando. Es la cuarta vez que aparece este patrón
+exacto en el proyecto (org/proyecto/workspace de mgmt en el punto 4, el
+team token en el punto 5, el proyecto semilla en sí en el punto 13): no se
+puede usar una identidad automatizada para crear la identidad que esa
+misma automatización necesita para existir.
+
+**Resolución, igual que las tres veces anteriores:** un paso manual, con
+`gcloud` y credenciales humanas. Se verificó contra el repositorio oficial
+de ejemplos de HashiCorp (`terraform-dynamic-credentials-setup-examples`)
+la sintaxis exacta antes de escribir el script — en particular el
+`attribute-condition`, que restringe el provider a un `assertion.sub` con
+`startsWith(...)`, no a atributos custom sueltos como se había asumido
+antes de verificar.
+
+Se creó `configs/seed-project-gcp/create-seed-wif.sh`, que dentro de
+`excel-pipeline-seed`:
+- Habilita las APIs necesarias (`iamcredentials`, `sts`).
+- Crea el Workload Identity Pool y el Provider OIDC, con el
+  `attribute-condition` acotado específicamente a la workspace
+  `excel-pipeline-governance-mgmt` (nunca al pool completo ni a la
+  organización de HCP Terraform entera).
+- Crea la Service Account y le otorga los roles de Organización
+  (`folderCreator`, `projectCreator`, `billing.user`).
+- Otorga `workloadIdentityUser` sobre esa SA, restringido al pool — seguro
+  porque solo un token que ya pasó el `attribute-condition` llega a poder
+  usar ese binding.
+- Imprime los 6 valores `TFC_GCP_*` para cargar a mano en
+  `excel-pipeline-governance-mgmt`.
+
+## 19. Secuencia completa de bootstrap, de punta a punta
+
+Con todo lo anterior, la cadena manual → apply queda así (✅ hecho, ⏳
+pendiente):
+
+1. ✅ Manual — dominio, Cloud Identity, Organización de GCP.
+2. ✅ Manual (`create-seed-project.sh`) — folders `bootstrap`/`shared` y
+   sus proyectos `excel-pipeline-seed`/`excel-pipeline-shared`.
+3. ✅ Manual — organización, proyecto mgmt y workspace `excel-pipeline-hcp-mgmt`
+   en HCP Terraform; Team API Token (`owners`) y variables (`organization`,
+   `vcs_repo_identifier`, `github_oauth_token_id`) cargadas ahí. La conexión
+   VCS en sí también se creó a mano (ver punto 20) — no vía código.
+4. ✅ Apply de `terraform/platform/hcp/` (en `hcp-mgmt`) — crea los
+   proyectos HCP Terraform dev/prod, las 8 workspaces de dominio, la
+   workspace `governance-mgmt` (las 9 usando la conexión VCS manual del
+   punto 3), y los variable sets vacíos por proyecto.
+5. ⏳ Manual (`create-seed-wif.sh`) — WIF pool/provider/SA dentro de
+   `excel-pipeline-seed`, acotado a `governance-mgmt`.
+6. ⏳ Manual — cargar los 6 `TFC_GCP_*` resultantes, más un `TFE_TOKEN`,
+   como variables de `excel-pipeline-governance-mgmt`.
+7. ⏳ Apply de `terraform/platform/governance/` (todavía sin escribir, en
+   `governance-mgmt`) — crea los folders `development`/`production`, los
+   proyectos `excel-pipeline-dev`/`-prod`, el WIF interno de cada uno, los
+   bindings de IAM a grupos, y escribe esos valores en los variable sets
+   que el paso 4 ya había creado.
+8. A partir de acá, sin más pasos manuales: las 8 workspaces de dominio
+   (ya creadas en el paso 4) pueden aplicar `terraform/domains/*` con
+   credenciales reales.
+
+## 20. `tfe_oauth_client` abandonado — conexión VCS creada a mano
+
+El `tfe_oauth_client` con Personal Access Token (sección 8) tampoco terminó
+funcionando: el apply falló porque el token usado no autenticaba
+correctamente contra GitHub. Es la segunda vez que un método de conexión
+VCS gestionado por código falla en la práctica — antes la GitHub App
+(sección 8), ahora `tfe_oauth_client`.
+
+**Resolución:** se eliminó `vcs.tf` por completo. En su lugar, se creó a
+mano una conexión OAuth custom con GitHub a nivel organización, desde la UI
+de HCP Terraform, y se toma su `oauth_token_id` (`ot-xxxxxxxx`) directo
+como variable (`github_oauth_token_id`, sensible), sin ningún recurso
+Terraform de por medio. Los 9 `vcs_repo` (8 workspaces de dominio +
+`governance-mgmt`) la referencian con `var.github_oauth_token_id`.
+
+**Por qué se dejó de insistir en gestionarlo por código:** a diferencia de
+los otros bootstraps manuales de este proyecto (todos resuelven un
+problema estructural de huevo-y-gallina, no evitable), acá no hay ningún
+impedimento técnico para hacerlo con Terraform — simplemente, dos intentos
+distintos de automatizarlo fallaron en la práctica, y crear la conexión
+una sola vez a mano y referenciar su ID resultó más confiable que seguir
+depurando por qué el camino automatizado no autenticaba. No todo beneficio
+de "está en código" vale la pena perseguir cuando el costo de depurarlo
+supera el de un paso manual documentado, sobre todo para algo que se
+configura una única vez.
+
 ---
 
 ## Lecciones aprendidas
@@ -411,3 +572,11 @@ prod.
   variable mal recordado no rompe en el momento de escribir el código — rompe
   en silencio en el primer run, con un error de autenticación difícil de
   distinguir de un problema de permisos real.
+- **No todo vale la pena gestionarlo por código.** La conexión VCS
+  (sección 20) es el único bootstrap manual de este proyecto que no
+  responde a un problema estructural de huevo-y-gallina — se podría haber
+  seguido depurando por qué `tfe_oauth_client` no autenticaba. Después de
+  dos intentos fallidos (GitHub App, luego `tfe_oauth_client`), crear la
+  conexión una vez a mano y referenciar su ID resultó más confiable que
+  perseguir el ideal de "todo en Terraform" para algo que se configura una
+  única vez y no vuelve a tocarse.
