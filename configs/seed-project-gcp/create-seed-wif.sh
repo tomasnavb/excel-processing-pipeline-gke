@@ -24,26 +24,44 @@ BILLING_ACCOUNT_ID="${BILLING_ACCOUNT_ID#billingAccounts/}"
 gcloud services enable iamcredentials.googleapis.com sts.googleapis.com \
   --project="$SEED_PROJECT_ID"
 
-# Workload Identity Pool
-gcloud iam workload-identity-pools create "$WIF_POOL_ID" \
-  --project="$SEED_PROJECT_ID" \
-  --location="global" \
-  --display-name="HCP Terraform pool"
+# Workload Identity Pool (safe to re-run: skips creation if it already exists)
+if ! gcloud iam workload-identity-pools describe "$WIF_POOL_ID" \
+  --project="$SEED_PROJECT_ID" --location="global" >/dev/null 2>&1; then
+  gcloud iam workload-identity-pools create "$WIF_POOL_ID" \
+    --project="$SEED_PROJECT_ID" \
+    --location="global" \
+    --display-name="HCP Terraform pool"
+fi
 
 # OIDC provider trusting HCP Terraform, restricted to one specific workspace
 # via the attribute condition (never widen this to the whole pool/org).
-gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER_ID" \
-  --project="$SEED_PROJECT_ID" \
-  --location="global" \
-  --workload-identity-pool="$WIF_POOL_ID" \
-  --issuer-uri="https://app.terraform.io" \
-  --attribute-mapping="google.subject=assertion.sub,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name,attribute.terraform_project_id=assertion.terraform_project_id,attribute.terraform_project_name=assertion.terraform_project_name,attribute.terraform_workspace_id=assertion.terraform_workspace_id,attribute.terraform_workspace_name=assertion.terraform_workspace_name" \
-  --attribute-condition="assertion.sub.startsWith(\"organization:${TFC_ORG_NAME}:project:${TFC_PROJECT_NAME}:workspace:${TFC_WORKSPACE_NAME}\")"
+if ! gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER_ID" \
+  --project="$SEED_PROJECT_ID" --location="global" \
+  --workload-identity-pool="$WIF_POOL_ID" >/dev/null 2>&1; then
+  gcloud iam workload-identity-pools providers create-oidc "$WIF_PROVIDER_ID" \
+    --project="$SEED_PROJECT_ID" \
+    --location="global" \
+    --workload-identity-pool="$WIF_POOL_ID" \
+    --issuer-uri="https://app.terraform.io" \
+    --attribute-mapping="google.subject=assertion.sub,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name,attribute.terraform_project_id=assertion.terraform_project_id,attribute.terraform_project_name=assertion.terraform_project_name,attribute.terraform_workspace_id=assertion.terraform_workspace_id,attribute.terraform_workspace_name=assertion.terraform_workspace_name" \
+    --attribute-condition="assertion.sub.startsWith(\"organization:${TFC_ORG_NAME}:project:${TFC_PROJECT_NAME}:workspace:${TFC_WORKSPACE_NAME}\")"
+fi
 
-# Service account Terraform will impersonate
-gcloud iam service-accounts create "$SA_NAME" \
-  --project="$SEED_PROJECT_ID" \
-  --display-name="Terraform admin (governance)"
+# Service account Terraform will impersonate (safe to re-run)
+if ! gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1; then
+  gcloud iam service-accounts create "$SA_NAME" \
+    --project="$SEED_PROJECT_ID" \
+    --display-name="Terraform admin (governance)"
+fi
+
+# IAM propagation lag: a freshly created SA can take a few seconds before
+# other APIs (like Billing) recognize it. Poll until it's visible instead of
+# guessing a fixed sleep, so bindings below don't race against creation.
+for i in $(seq 1 10); do
+  gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1 && break
+  echo "Waiting for service account to propagate... ($i/10)"
+  sleep 5
+done
 
 # Organization-level permissions: create folders/projects, attach billing
 gcloud organizations add-iam-policy-binding "$ORG_ID" \
