@@ -83,7 +83,13 @@ gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
   --role="roles/iam.workloadIdentityUser" \
   --member="principalSet://iam.googleapis.com/projects/${SEED_PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_ID}/*"
 
-# Load these 6 values as Environment Variables on excel-pipeline-governance-mgmt
+GREEN=$(tput setaf 2)
+RESET=$(tput sgr0)
+
+echo ""
+echo "${GREEN}Success!${RESET} Load these 6 values as Environment Variables on the"
+echo "${TFC_WORKSPACE_NAME} workspace:"
+echo ""
 echo "TFC_GCP_PROVIDER_AUTH=true"
 echo "TFC_GCP_PRINCIPAL_TYPE=service_account"
 echo "TFC_GCP_PROJECT_NUMBER=${SEED_PROJECT_NUMBER}"
