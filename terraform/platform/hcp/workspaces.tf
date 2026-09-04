@@ -9,7 +9,7 @@ resource "tfe_workspace" "domain" {
 
   vcs_repo {
     identifier     = var.vcs_repo_identifier
-    oauth_token_id = tfe_oauth_client.github.oauth_token_id
+    oauth_token_id = var.github_oauth_token_id
   }
 
   trigger_patterns = [
@@ -30,7 +30,7 @@ resource "tfe_workspace" "governance" {
 
   vcs_repo {
     identifier     = var.vcs_repo_identifier
-    oauth_token_id = tfe_oauth_client.github.oauth_token_id
+    oauth_token_id = var.github_oauth_token_id
   }
 
   trigger_patterns = [
