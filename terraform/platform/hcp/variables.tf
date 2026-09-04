@@ -10,6 +10,6 @@ variable "vcs_repo_identifier" {
 
 variable "github_oauth_token_id" {
   type        = string
-  description = "GitHub personal access token (classic, repo scope) used to create the HCP Terraform OAuth client connection"
+  description = "OAuth token ID (ot-xxxxxxxx) of the custom GitHub connection created manually at the organization level in HCP Terraform"
   sensitive   = true
 }
