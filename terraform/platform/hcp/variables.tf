@@ -1,6 +1,6 @@
-variable "organization" {
+variable "hcp_organization_name" {
   type        = string
-  description = "Organization name"
+  description = "HCP Terraform organization name (not the GCP Organization, and not a numeric ID)"
 }
 
 variable "vcs_repo_identifier" {

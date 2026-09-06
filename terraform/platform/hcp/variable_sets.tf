@@ -2,7 +2,7 @@ resource "tfe_variable_set" "credentials" {
   for_each = local.environments
 
   name         = "${each.key}-credentials"
-  organization = var.organization
+  organization = var.hcp_organization_name
 }
 
 resource "tfe_project_variable_set" "credentials" {

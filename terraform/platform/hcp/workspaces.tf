@@ -2,7 +2,7 @@ resource "tfe_workspace" "domain" {
   for_each = local.workspaces
 
   name              = "excel-pipeline-${each.value.domain}-${each.value.environment}"
-  organization      = var.organization
+  organization      = var.hcp_organization_name
   project_id        = each.value.project_id
   working_directory = each.value.working_directory
   auto_apply        = false
@@ -23,7 +23,7 @@ resource "tfe_workspace" "domain" {
 # self-destroy risk.
 resource "tfe_workspace" "governance" {
   name              = "excel-pipeline-governance-mgmt"
-  organization      = var.organization
+  organization      = var.hcp_organization_name
   project_id        = data.tfe_project.mgmt.id
   working_directory = "terraform/platform/governance"
   auto_apply        = false

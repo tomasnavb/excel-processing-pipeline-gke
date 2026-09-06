@@ -3,12 +3,12 @@
 # here (never imported) so the governance workspace can be placed inside it.
 data "tfe_project" "mgmt" {
   name         = "excel-processing-pipeline-gke-mgmt"
-  organization = var.organization
+  organization = var.hcp_organization_name
 }
 
 resource "tfe_project" "environments" {
   for_each = local.environments
 
-  organization = var.organization
+  organization = var.hcp_organization_name
   name         = "excel-processing-pipeline-gke-${each.key}"
 }
