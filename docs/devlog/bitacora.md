@@ -295,28 +295,23 @@ dev/prod (una vez que el proyecto semilla exista) va a vivir en
 org/folder — se trató como una sola responsabilidad ("todo lo que es meta a
 nivel organización") en vez de separarlo en un directorio aparte.
 
-## 14. Setup inicial de los proyectos bootstrap y shared de GCP
+## 14. Setup inicial del proyecto bootstrap de GCP
 
 Con el dominio comprado, Cloud Identity activada y la Organización ya creada
-(prerequisito que había quedado bloqueado en el punto 13), se crearon a mano
-dos folders con un propósito bien distinto cada uno, en vez de agrupar todo
-en un único folder de "gestión":
+(prerequisito que había quedado bloqueado en el punto 13), se creó a mano el
+folder `bootstrap` con el proyecto semilla (`excel-pipeline-seed`) adentro:
+aloja únicamente el Workload Identity Pool/Provider y la Service Account que
+Terraform va a impersonar para gestionar el resto de la organización
+(folders, proyectos dev/prod/shared). Es un "root of trust" — sostiene
+permisos a nivel Organización, así que conviene mantenerlo aislado y de bajo
+tráfico para que sea fácil de auditar. No aloja carga de trabajo de la
+aplicación.
 
-- **`bootstrap`**, con el proyecto semilla (`excel-pipeline-seed`) adentro:
-  aloja únicamente el Workload Identity Pool/Provider y la Service Account
-  que Terraform va a impersonar para gestionar el resto de la organización
-  (folders, proyectos dev/prod). Es un "root of trust" — sostiene permisos a
-  nivel Organización, así que conviene mantenerlo aislado y de bajo tráfico
-  para que sea fácil de auditar.
-- **`shared`**, con el proyecto `excel-pipeline-shared` adentro: aloja
-  recursos compartidos entre dev y prod — el primer caso concreto es
-  Artifact Registry (`excel-pipeline-images`), para poder construir una
-  imagen una sola vez y promoverla entre entornos sin duplicarla. Se decidió
-  como proyecto aparte (ni dev, ni prod, ni el de bootstrap) para no romper
-  el aislamiento entre dev/prod, y para no mezclar un recurso de tráfico
-  constante con el proyecto más sensible del setup.
-
-Ninguno de los dos aloja carga de trabajo de la aplicación.
+> En un momento de esta etapa se planeó crear también, en el mismo paso
+> manual, un folder `shared` con un proyecto `excel-pipeline-shared` para
+> alojar recursos compartidos como Artifact Registry — pero solo se llegó a
+> ejecutar la creación del proyecto semilla. Ver punto 21: ese proyecto
+> shared se termina creando por código, no a mano.
 
 Pasos ejecutados — variables de entorno con valores de ejemplo, después la
 secuencia de comandos:
@@ -327,12 +322,10 @@ export ORG_ID="123456789012"
 export ADMIN_USER="admin@example.dev"
 export BOOTSTRAP_FOLDER_NAME="bootstrap"
 export SEED_PROJECT_ID="excel-pipeline-seed"
-export SHARED_FOLDER_NAME="shared"
-export SHARED_PROJECT_ID="excel-pipeline-shared"
 export REGION="europe-west9"
 
 # Otorgar al usuario administrador permiso para crear folders a nivel
-# organización (necesario antes de poder crear los folders)
+# organización (necesario antes de poder crear el folder)
 gcloud organizations add-iam-policy-binding "$ORG_ID" \
   --member="user:$ADMIN_USER" \
   --role="roles/resourcemanager.folderAdmin"
@@ -349,18 +342,6 @@ gcloud projects create "$SEED_PROJECT_ID" \
   --name="excel-pipeline-seed-project" \
   --labels=type=seed-project
 
-# --- Folder shared + proyecto compartido ---
-SHARED_FOLDER_NAME_FULL=$(gcloud resource-manager folders create \
-  --display-name="$SHARED_FOLDER_NAME" \
-  --organization="$ORG_ID" \
-  --format="value(name)")
-SHARED_FOLDER_ID="${SHARED_FOLDER_NAME_FULL#folders/}"
-
-gcloud projects create "$SHARED_PROJECT_ID" \
-  --folder="$SHARED_FOLDER_ID" \
-  --name="excel-pipeline-shared-project" \
-  --labels=type=shared-project
-
 # Crear una configuración de gcloud CLI dedicada para el proyecto semilla,
 # para no operar accidentalmente sobre otro proyecto/contexto
 gcloud config configurations create excel-pipeline-seed
@@ -371,12 +352,9 @@ gcloud config set compute/region "$REGION"
 gcloud config configurations describe excel-pipeline-seed
 ```
 
-Quedan pendientes: sobre el proyecto semilla, crear el Workload Identity
-Pool + Provider, la Service Account que Terraform va a impersonar, y los
-bindings de IAM a nivel Organización descritos en el punto 13; sobre el
-proyecto shared, crear el propio Artifact Registry y los bindings de IAM
-cross-project que le den lectura a los service accounts de GKE en dev y
-prod.
+Quedaba pendiente crear, sobre este proyecto, el Workload Identity Pool +
+Provider y la Service Account que Terraform va a impersonar — resuelto en
+el punto 18.
 
 ## 15. Workspace de governance agregada al código de `hcp`
 
@@ -538,6 +516,29 @@ depurando por qué el camino automatizado no autenticaba. No todo beneficio
 de "está en código" vale la pena perseguir cuando el costo de depurarlo
 supera el de un paso manual documentado, sobre todo para algo que se
 configura una única vez.
+
+## 21. Scaffolding de `terraform/platform/governance/`, y `shared` sale del script manual
+
+Se crearon los archivos vacíos de `terraform/platform/governance/`:
+`terraform.tf`, `providers.tf`, `organization.tf`, `locals.tf`, `folders.tf`,
+`projects.tf`, `iam.tf`, `wif.tf`, `variable_sets.tf`, `variables.tf`,
+`outputs.tf` — separando por tipo de recurso, mismo criterio que en `hcp/`.
+
+Al planear esto se notó que el folder `shared` y el proyecto
+`excel-pipeline-shared` (mencionados como creados a mano en el punto 14)
+nunca se llegaron a ejecutar — solo se corrió la parte del proyecto semilla.
+Revisando el motivo original para crear `shared` a mano (mismo script que el
+seed), no aplica: a diferencia del proyecto semilla, `shared` no aloja
+ningún WIF que otra cosa necesite para poder arrancar — es un proyecto
+normal, así que `governance` puede crearlo con el mismo `for_each` que usa
+para `development`/`production`, una vez que ya tiene su propio WIF andando
+(punto 18). Se corrigió el punto 14 para reflejar que nunca se creó, y se
+recortó `create-seed-project.sh` (y su README) para que solo cree el folder
+`bootstrap` y el proyecto semilla — el único que sí tiene el impedimento
+estructural real.
+
+Esto deja el bootstrap manual reducido a su mínimo genuino: un solo
+proyecto de GCP creado a mano, no dos.
 
 ---
 
