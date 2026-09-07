@@ -38,3 +38,12 @@ resource "tfe_workspace" "governance" {
     "terraform/modules/**",
   ]
 }
+
+# Pushes our own copy of this value into governance-mgmt, so it doesn't
+# need to be typed manually a second time — same value, one source.
+resource "tfe_variable" "governance_hcp_organization_name" {
+  workspace_id = tfe_workspace.governance.id
+  key          = "hcp_organization_name"
+  value        = var.hcp_organization_name
+  category     = "terraform"
+}

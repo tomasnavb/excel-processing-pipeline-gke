@@ -17,6 +17,8 @@ that runs in the bootstrap chain, since it creates the workspace that
 - An empty `tfe_variable_set` per environment (`dev`, `prod`), attached to
   its respective project. Populated later by `governance`, once it creates
   the per-project GCP identities those variable sets need to hold.
+- A `hcp_organization_name` Terraform variable on `governance-mgmt`, set to
+  this workspace's own value — so it isn't typed manually a second time.
 
 ## What this does NOT do
 
