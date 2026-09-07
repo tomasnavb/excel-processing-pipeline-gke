@@ -2,10 +2,10 @@
 
 > 🚧 **Active development.** This repository is being built and documented
 > incrementally, in public — infrastructure, application code, and docs land
-> as they're actually finished, not all at once. See [Status](#status) below
+> as they're actually finished, not all at once. See [Status](#-status) below
 > for what's live today and what's next.
 
-## Overview
+## 📖 Overview
 
 An asynchronous Excel file processing pipeline on Google Cloud:
 
@@ -23,7 +23,9 @@ An asynchronous Excel file processing pipeline on Google Cloud:
   via **Workload Identity Federation** — no static service account keys
   anywhere in the pipeline.
 
-## Background
+---
+
+## 🧭 Background
 
 This project is inspired by a real tool I designed and built: a Python +
 PyQt5 program that splits a merged customer spreadsheet into one file per
@@ -42,7 +44,9 @@ distinct recipients) on a cloud-native stack (GCP, Kubernetes, event-driven
 architecture, Terraform), built to explore how that problem scales and to
 demonstrate an infrastructure approach, not to replace the original system.
 
-## Architecture
+---
+
+## 🏗️ Architecture
 
 ![Infrastructure diagram](docs/architecture/infra-excel-processing-pipeline-gke.png)
 
@@ -88,37 +92,53 @@ organizational concept for grouping workspaces, unrelated to a GCP Project.
     └── excel-pipeline-governance-mgmt (Workspace)
 ```
 
-## Status
+---
+
+## ✅ Status
 
 ### Done
 
-- Architecture defined; repo structure and GCP/HCP Terraform naming
-  conventions established.
-- `terraform/platform/hcp/`: creates the `dev`/`prod` HCP Terraform
-  projects and their 8 domain workspaces via `for_each`, wires up VCS
-  connectivity (`tfe_oauth_client`), and drives it all from a manually
-  bootstrapped management workspace.
-- `terraform/domains/{networking,gke,data,cloud-run}/{dev,prod}` scaffolded
-  (not yet implemented).
-- GCP organization set up under a Cloud Identity Free domain; `bootstrap`
-  and `shared` folders and their seed/shared projects created.
-- Architecture diagram and [diagramming style guide](docs/architecture/style-guide.md).
+- [x] Architecture defined; repo structure and GCP/HCP Terraform naming
+      conventions established.
+- [x] `terraform/platform/hcp/`: creates the `dev`/`prod` HCP Terraform
+      projects and their 8 domain workspaces via `for_each`, connects them
+      to a custom GitHub OAuth connection, and drives it all from a
+      manually bootstrapped management workspace.
+- [x] GCP organization set up under a Cloud Identity Free domain; the
+      `bootstrap` folder and seed project created, with their own Workload
+      Identity Pool/Provider and service account for governance's auth.
+- [x] `terraform/platform/governance/`: creates the `development`/
+      `production`/`shared` folders and their GCP projects, the 9 Cloud
+      Identity groups (split by environment where needed), project-level
+      IAM for `infra-admins`, and a per-project Workload Identity
+      Pool/Provider/service account for the domain workspaces to use.
+- [x] IAM groups/roles reference table and diagramming style guide.
+- [x] Architecture diagram.
 
 ### Next steps
 
-- Workload Identity Pool/Provider and service account in the seed project,
-  with organization-level IAM bindings.
-- Artifact Registry in the shared project, with cross-project IAM for GKE.
-- `terraform/platform/governance/`: folders, dev/prod GCP projects, and IAM
-  group bindings.
-- `terraform/domains/{networking,gke,data,cloud-run}` implementation.
-- The FastAPI API and the GKE worker.
-- Kustomize manifests and Cloud Build pipelines.
+- [ ] Artifact Registry in the shared project, with cross-project IAM for
+      GKE/Cloud Run image pulls.
+- [ ] Resource-scoped IAM bindings (`gke-workloads`, `app-runtime`,
+      `api-invokers`, `ci-cd-pipelines` roles), attached by each domain as
+      it creates its own resources.
+- [ ] `terraform/domains/{networking,gke,data,cloud-run}` implementation
+      (currently scaffolded, not yet implemented).
+- [ ] The FastAPI API and the GKE worker.
+- [ ] Kustomize manifests and Cloud Build pipelines.
 
 A detailed, chronological log of decisions and problems solved along the way
 lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).
 
-## Tech stack
+---
+
+## 🛠️ Tech stack
+
+![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?logo=googlecloud&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)
+![Terraform](https://img.shields.io/badge/Terraform-7B42BC?logo=terraform&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
 Google Cloud (Cloud Run, GKE Autopilot, Firestore, GCS, Pub/Sub, Cloud
 Identity/IAM) · Terraform + HCP Terraform · FastAPI · Docker · Kustomize
