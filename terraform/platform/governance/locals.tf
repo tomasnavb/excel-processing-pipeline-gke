@@ -58,4 +58,39 @@ locals {
       role        = pair[1]
     }
   }
+
+  # dev/prod only — shared has no domain workspaces deploying into it, so
+  # it doesn't need its own deployer identity.
+  deployer_environments = toset(["dev", "prod"])
+
+  # The HCP Terraform Projects created in terraform/platform/hcp/, one per
+  # environment, containing exactly that environment's 4 domain workspaces.
+  hcp_project_names = {
+    dev  = "excel-processing-pipeline-gke-dev"
+    prod = "excel-processing-pipeline-gke-prod"
+  }
+
+  tfc_gcp_credentials = {
+    for env in local.deployer_environments : env => {
+      TFC_GCP_PROVIDER_AUTH             = "true"
+      TFC_GCP_PRINCIPAL_TYPE            = "service_account"
+      TFC_GCP_PROJECT_NUMBER            = google_project.this[env].number
+      TFC_GCP_WORKLOAD_POOL_ID          = google_iam_workload_identity_pool.deployer[env].workload_identity_pool_id
+      TFC_GCP_WORKLOAD_PROVIDER_ID      = google_iam_workload_identity_pool_provider.deployer[env].workload_identity_pool_provider_id
+      TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL = google_service_account.deployer[env].email
+    }
+  }
+
+  tfc_gcp_variable_instances = {
+    for entry in flatten([
+      for env, vars in local.tfc_gcp_credentials : [
+        for key, value in vars : {
+          instance_key = "${env}-${key}"
+          environment  = env
+          key          = key
+          value        = value
+        }
+      ]
+    ]) : entry.instance_key => entry
+  }
 }

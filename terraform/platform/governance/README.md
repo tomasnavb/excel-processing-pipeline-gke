@@ -15,14 +15,18 @@ project (see `configs/seed-project-gcp/`).
   service account exists once per project — see
   [`docs/governance/iam.md`](../../../docs/governance/iam.md) for why).
 - The `infra-admins-{env}@` project-level IAM bindings.
+- A per-project Workload Identity Pool/Provider/Service Account
+  (`sa-terraform-deployer`) in `excel-pipeline-dev` and `excel-pipeline-prod`
+  — the identity `terraform/domains/*` workspaces use to create GKE, Cloud
+  Run, Storage, Pub/Sub, and Firestore resources. Scoped to a single
+  project, deliberately separate from the bootstrap project's org-level
+  identity.
+- The resulting `TFC_GCP_*` values, written into the variable sets that
+  `terraform/platform/hcp/` already created for the `dev`/`prod` projects —
+  this is why `governance` also needs a `tfe` provider, alongside `google`.
 
 ## What this does NOT do (yet)
 
-- Create the per-project Workload Identity Pool/Provider/Service Account
-  that `terraform/domains/*` workspaces will use to create GKE, Cloud Run,
-  Storage, Pub/Sub, and Firestore resources.
-- Write the resulting `TFC_GCP_*` values into the variable sets that
-  `terraform/platform/hcp/` already created for the `dev`/`prod` projects.
 - Grant any of the resource-scoped roles (`gke-workloads-{env}@`,
   `app-runtime-{env}@`, `api-invokers-{env}@`, `ci-cd-pipelines@`) — those
   are attached by whichever domain creates the resource they target.
@@ -31,15 +35,20 @@ project (see `configs/seed-project-gcp/`).
 
 | Variable | Category | Notes |
 |---|---|---|
-| `gcp_organization_id` | Terraform variable | Numeric GCP Organization ID |
 | `billing_account_id` | Terraform variable | Attached to the 3 projects created here |
 | `personal_account_email` | Terraform variable (sensitive) | Added to `infra-admins-{env}@`; not hardcoded since this repo is public |
+| `hcp_organization_name` | Terraform variable | Set automatically by `terraform/platform/hcp` — no manual action needed |
+| `TFE_TOKEN` | Environment variable (sensitive) | Needed for the `tfe` provider — same Team API Token mechanism as `hcp-mgmt` |
 | `TFC_GCP_PROVIDER_AUTH` | Environment variable | `true` |
 | `TFC_GCP_PRINCIPAL_TYPE` | Environment variable | `service_account` |
 | `TFC_GCP_PROJECT_NUMBER` | Environment variable | From `excel-pipeline-seed`, printed by `create-seed-wif.sh` |
 | `TFC_GCP_WORKLOAD_POOL_ID` | Environment variable | Same |
 | `TFC_GCP_WORKLOAD_PROVIDER_ID` | Environment variable | Same |
 | `TFC_GCP_RUN_SERVICE_ACCOUNT_EMAIL` | Environment variable | Same |
+
+The GCP Organization itself isn't a variable — it's looked up by domain via
+`data "google_organization"` in `organization.tf`, since the domain is
+already public and this avoids one manually-typed numeric ID.
 
 See [`docs/devlog/bitacora.md`](../../../docs/devlog/bitacora.md) for the
 full reasoning behind this bootstrap chain.

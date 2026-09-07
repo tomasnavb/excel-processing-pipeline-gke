@@ -540,6 +540,107 @@ estructural real.
 Esto deja el bootstrap manual reducido a su mínimo genuino: un solo
 proyecto de GCP creado a mano, no dos.
 
+## 22. Renombre de las variables `organization`, y por qué no era un conflicto técnico
+
+Surgió la duda de si `hcp/` y `governance/` podían tener cada uno una
+variable llamada `organization` sin chocar, siendo que significan cosas
+distintas (organización de HCP Terraform vs. Organización de GCP).
+**Aclaración:** no hay conflicto técnico posible — cada directorio es un
+root module aislado, aplicado por una workspace distinta, con su propio
+state y sus propias variables cargadas. Terraform nunca evalúa ambos en el
+mismo contexto. El motivo real para renombrar fue puramente de legibilidad
+humana, no de corrección funcional.
+
+Se renombró de todas formas, seguiendo la misma convención en los dos
+lugares: `hcp/variables.tf` pasó de `organization` a `hcp_organization_name`
+(propagado a `providers.tf`, `projects.tf`, `workspaces.tf`,
+`variable_sets.tf` y `terraform.tfvars` local), y `governance/variables.tf`
+usa `gcp_organization_id` para la Organización de GCP y también declara su
+propio `hcp_organization_name` (mismo valor que en `hcp/`, porque
+`governance` también necesita hablarle a la API de HCP Terraform para
+escribir en los variable sets — ver punto 25).
+
+## 23. Tabla de grupos de IAM — de 5 a 9, por una fuga entre entornos
+
+Al pasar la tabla de grupos/roles a código se encontraron primero varias
+inconsistencias puntuales en el borrador original que el usuario había
+compartido: `api-runtime-sa` no debía tener `pubsub.subscriber` (la API
+nunca consume Pub/Sub, solo el worker), faltaba un rol de GCS en dos
+grupos, `ci-cd-pipelines@` tenía como miembro a `excel-client-sa` (la
+identidad de "quien llama a la API", sin relación con construir imágenes),
+e `infra-admins@` solo tenía 2 de los ~6 roles que en realidad necesita
+para crear los 4 dominios.
+
+Corregido eso, apareció un problema más de fondo: varios grupos
+(`gke-workloads@`, `app-runtime@`, y la parte de SA de `infra-admins@`)
+iban a contener Service Accounts que existen **una vez por proyecto**
+(`worker-gke-sa` de dev es una identidad distinta a la de prod). Un solo
+grupo compartido, atado a un recurso de dev y por separado a uno de prod,
+filtra acceso — el worker de dev termina con permisos sobre el recurso de
+prod, porque la membresía del grupo no distingue de qué proyecto es cada
+miembro.
+
+**Resolución:** grupos separados por entorno para las 4 categorías que
+envuelven identidades por-proyecto (`gke-workloads-{env}@`,
+`app-runtime-{env}@`, `infra-admins-{env}@`, `api-invokers-{env}@`) — 8
+grupos. `ci-cd-pipelines@` queda como uno solo, porque apunta únicamente al
+proyecto `shared`, sin límite de entorno que proteger. Total: 9 grupos.
+
+Se documentó todo en `docs/governance/iam.md`, incluyendo por qué cada
+binding vive en `governance` (solo los de `infra-admins-{env}@`, a nivel
+proyecto) o en el domain correspondiente (el resto, a nivel recurso).
+
+## 24. Primer código de `governance` — bugs en el borrador de `locals.tf`/`folders.tf`
+
+El primer intento de `locals.tf`/`folders.tf` tenía varios errores:
+- Confundía la convención de nombres de **folders** (`development`,
+  `production` — nombre completo, sin prefijo) con la de **proyectos**
+  (`excel-pipeline-dev` — prefijo corto). Es la única excepción a la
+  convención corta, y se mezcló con la regla general por error.
+- `keys(env)` sobre un elemento de un `for` que ya era un string (no un
+  mapa) — error de tipo.
+- `parent = var.organization` le pasaba al módulo de folders un nombre en
+  vez del formato `"organizations/{ID}"` que espera.
+- Se usaban `per_folder_admins`/`all_folder_admins` del módulo, que por
+  defecto otorgan `roles/owner` a nivel folder — mucho más amplio que el
+  modelo de permisos granulares por proyecto ya definido. Se optó por no
+  usar el mecanismo de roles del módulo (`set_roles = false`) y manejar
+  todos los bindings de `infra-admins-{env}@` aparte, en `iam.tf`.
+
+Corregido, `locals.tf`/`folders.tf`/`projects.tf` quedaron escritos con un
+único `local.projects` (mapa dev/prod/shared → folder + project id) del
+que se derivan tanto los folders como los proyectos vía `for_each`.
+
+## 25. WIF por proyecto (dev/prod), y publicación de credenciales hacia HCP Terraform
+
+Implementado en código lo que se había diseñado en el punto 17: `wif.tf`
+crea, para dev y prod, su propio Workload Identity Pool + Provider OIDC +
+Service Account (`sa-terraform-deployer`) — identidad separada de la del
+proyecto bootstrap, acotada únicamente a su propio proyecto. La SA no
+recibe roles directamente en este archivo; los hereda por ser miembro de
+`infra-admins-{env}@` (punto 23).
+
+Una diferencia con el WIF del bootstrap (punto 18): ahí el
+`attribute_condition` se acotaba a una sola workspace
+(`excel-pipeline-governance-mgmt`). Acá se acota al **Project de HCP
+Terraform** de ese entorno (`excel-processing-pipeline-gke-dev`, por
+ejemplo) en vez de a una sola workspace, porque las 4 workspaces de
+dominio de ese entorno comparten esta misma identidad.
+
+`variable_sets.tf` completa el circuito: agrega el provider `tfe` (nuevo en
+`governance`, además de `google`/`google-beta`), busca por nombre los
+variable sets vacíos que `hcp` ya había creado
+(`data "tfe_variable_set"`), y escribe ahí los 6 valores `TFC_GCP_*` por
+entorno.
+
+**Bug encontrado en el camino:** `issuer_uri` no es un atributo de primer
+nivel en `google_iam_workload_identity_pool_provider` — va anidado en un
+bloque `oidc { issuer_uri = ... }`. Lo marcó el linter del IDE, no una
+revisión manual.
+
+Con esto, el paso 7 de la secuencia de bootstrap (punto 19) queda escrito
+en código — falta correrlo.
+
 ---
 
 ## Lecciones aprendidas
@@ -581,3 +682,12 @@ proyecto de GCP creado a mano, no dos.
   conexión una vez a mano y referenciar su ID resultó más confiable que
   perseguir el ideal de "todo en Terraform" para algo que se configura una
   única vez y no vuelve a tocarse.
+- **Un grupo de IAM no hereda el aislamiento de sus miembros.** El diseño
+  ya separaba dev y prod en proyectos, WIF y workspaces distintas — pero al
+  meter Service Accounts por-proyecto dentro de un grupo *compartido*
+  (sección 23), ese aislamiento se rompía igual, porque la membresía de un
+  Cloud Identity group es global, no sabe a qué entorno "pertenece" cada
+  miembro. La lección: cuando un identificador agrupa identidades que en
+  el resto del sistema están deliberadamente separadas, hay que preguntarse
+  explícitamente si el agrupador en sí también necesita esa separación —
+  no alcanza con que las piezas de abajo estén bien aisladas.

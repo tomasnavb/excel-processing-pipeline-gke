@@ -44,7 +44,7 @@ if ! gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER_ID" \
     --workload-identity-pool="$WIF_POOL_ID" \
     --issuer-uri="https://app.terraform.io" \
     --attribute-mapping="google.subject=assertion.sub,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name,attribute.terraform_project_id=assertion.terraform_project_id,attribute.terraform_project_name=assertion.terraform_project_name,attribute.terraform_workspace_id=assertion.terraform_workspace_id,attribute.terraform_workspace_name=assertion.terraform_workspace_name" \
-    --attribute-condition="assertion.sub.startsWith(\"organization:${TFC_ORG_NAME}:project:${TFC_PROJECT_NAME}:workspace:${TFC_WORKSPACE_NAME}\")"
+    --attribute-condition="assertion.sub.startsWith(\"organization:${TFC_ORG_NAME}:project:${TFC_PROJECT_NAME}:workspace:${TFC_WORKSPACE_NAME}:\")"
 fi
 
 # Service account Terraform will impersonate (safe to re-run)
