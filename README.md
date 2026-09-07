@@ -23,6 +23,25 @@ An asynchronous Excel file processing pipeline on Google Cloud:
   via **Workload Identity Federation** — no static service account keys
   anywhere in the pipeline.
 
+## Background
+
+This project is inspired by a real tool I designed and built: a Python +
+PyQt5 program that splits a merged customer spreadsheet into one file per
+customer, with correct headers and filenames, ready to email out
+individually. Some publishers send data for up to 60 customers mixed into a
+single file; a VBA post-processing step handles a legacy `.xls` export
+format one client still requires.
+
+It's in active use across 16 recurring publishers. Manual segmentation used
+to take 1–1.5 hours per publisher (~20 hours total); the tool now does each
+in under a minute (~20 minutes total).
+
+This repository is not a 1:1 port of it — it's a reconstruction of the same
+underlying business problem (splitting and routing a shared file to many
+distinct recipients) on a cloud-native stack (GCP, Kubernetes, event-driven
+architecture, Terraform), built to explore how that problem scales and to
+demonstrate an infrastructure approach, not to replace the original system.
+
 ## Architecture
 
 ![Infrastructure diagram](docs/architecture/infra-excel-processing-pipeline-gke.png)
