@@ -45,7 +45,11 @@ resource "google_iam_workload_identity_pool_provider" "deployer" {
   }
 
   attribute_mapping = {
-    "google.subject"                        = "assertion.sub"
+    # google.subject caps at 127 bytes — the full assertion.sub (org +
+    # project + workspace + run phase) blows past that with names this
+    # descriptive. terraform_workspace_id is short and already unique, and
+    # attribute_condition below still checks the full sub independently.
+    "google.subject"                        = "assertion.terraform_workspace_id"
     "attribute.terraform_organization_id"   = "assertion.terraform_organization_id"
     "attribute.terraform_organization_name" = "assertion.terraform_organization_name"
     "attribute.terraform_project_id"        = "assertion.terraform_project_id"
