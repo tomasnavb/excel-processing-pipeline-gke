@@ -641,6 +641,176 @@ revisión manual.
 Con esto, el paso 7 de la secuencia de bootstrap (punto 19) queda escrito
 en código — falta correrlo.
 
+## 26. Revisión de seguridad de `governance/` completo
+
+Pedido explícito de revisar todo el directorio en busca de vulnerabilidades,
+bugs o algo potencialmente dañino, antes del primer apply real. Tres
+hallazgos, los tres corregidos:
+
+- `google_project_service` (`iamcredentials`, `sts` en `wif.tf`) tiene
+  `disable_on_destroy = true` por defecto — destruir ese recurso (un
+  `destroy` accidental, un refactor que saca el bloque) deshabilitaría la
+  API activamente, rompiendo el auth WIF de las 4 workspaces de dominio de
+  ese entorno. Se agregó `disable_on_destroy = false`.
+- Los `tfe_variable` que escriben los `TFC_GCP_*` en los variable sets
+  (`variable_sets.tf`) no estaban marcados `sensitive` — inconsistente con
+  el mismo criterio ya aplicado a otros IDs del proyecto. Se agregó
+  `sensitive = true`.
+- Comparando el `attribute_condition` nuevo de `wif.tf` contra el viejo de
+  `create-seed-wif.sh`, se encontró que este último terminaba sin `:` al
+  final del nombre de la workspace — un `startsWith` sin delimitador final
+  puede matchear por coincidencia de prefijo (`workspace-mgmt` matchea
+  contra un futuro `workspace-mgmt-v2`). Se agregó el `:` final.
+
+De paso se verificó (no hacía falta cambiar nada) que `google_project` ya
+tiene `deletion_policy = "PREVENT"` por defecto desde el provider v6+, así
+que los 3 proyectos ya estaban protegidos contra un destroy accidental sin
+código adicional.
+
+## 27. Conflicto de versión de providers en el primer `terraform init`
+
+```
+Error: Failed to query available provider packages
+Could not retrieve the list of available versions for provider
+hashicorp/google: no available releases match the given constraints
+>= 3.67.0, >= 6.0.0, < 8.0.0, ~> 8.1
+```
+
+`governance/terraform.tf` fijaba `google`/`google-beta` en `~> 8.1` — pero
+`terraform-google-modules/group/google` exige `< 8` internamente (ya
+verificado meses atrás al evaluar ese módulo, sección de evaluación de
+módulos). `>= 8.1` y `< 8` no tienen ninguna versión en común. El error solo
+aparece en un `terraform init` real — ninguna revisión de código lo
+detecta sin cruzar manualmente el `versions.tf` de cada módulo de terceros
+contra el `required_providers` propio.
+
+**Fix:** `~> 7.0` — satisface tanto el `< 8` del módulo de grupos como el
+`>= 6.0.0` que pedía el módulo de folders.
+
+## 28. Primeros plans reales: `TFE_TOKEN` faltante y límite de 127 bytes en WIF
+
+Dos errores distintos en los primeros intentos de plan sobre
+`governance-mgmt`:
+
+**`could not find variable set tomas-navarro-projects/dev-credentials`** —
+a pesar de que los variable sets sí existían (visibles en la UI). La causa
+no era ausencia sino permisos: nunca se había cargado `TFE_TOKEN` en
+`governance-mgmt` (quedó documentado en su README pero no se llegó a
+cargar), así que el provider `tfe` usaba el token limitado que HCP
+Terraform inyecta por defecto — el propio log lo advertía ("Authentication
+method has limited TFE provider permissions"). Se evaluó (y descartó)
+empujar `TFE_TOKEN` desde `hcp` con el mismo mecanismo usado para
+`hcp_organization_name` — a diferencia de ese valor, `TFE_TOKEN` es un
+credential real con poder de owner; duplicarlo en el state de `hcp` además
+del de `governance` aumenta la exposición sin reducir ninguna carga manual
+(igual hay que tipearlo una vez en algún lado). Se cargó directo en
+`governance-mgmt`, igual que en `hcp-mgmt`.
+
+**`google.subject exceeds the 127 bytes limit`** — al generar el token para
+`governance-admin-sa@excel-pipeline-seed`. Límite real de GCP, no
+documentado en la guía de setup de HCP Terraform (sí en la doc de
+troubleshooting de IAM, verificada antes de aplicar el fix): el atributo
+`google.subject` no puede superar 127 bytes, y estaba mapeado directo desde
+`assertion.sub` — que con nombres tan descriptivos como los de este
+proyecto (`excel-processing-pipeline-gke-mgmt`, `excel-pipeline-governance-mgmt`)
+supera el límite. Importante: esto no afecta `attribute_condition`, que
+sigue evaluando el `sub` completo sin restricción de tamaño — el límite es
+específico del atributo *mapeado*, que solo se usa para identificar al
+llamante en los audit logs.
+
+**Fix:** mapear `google.subject` a `assertion.terraform_workspace_id` (corto
+y ya único) en vez de al `sub` completo — aplicado en `wif.tf` y en
+`create-seed-wif.sh`. Como el provider del bootstrap ya existía (creado en
+una corrida anterior), hizo falta un `gcloud ... providers update-oidc`
+manual además del cambio de código — crear de nuevo no alcanza porque el
+script salta la creación si ya existe.
+
+## 29. Ciclo circular por mal diagnóstico del "quota project"
+
+Al resolver un error de "Cloud Resource Manager API no habilitada", el
+primer intento habilitó `cloudresourcemanager`/`cloudidentity` **sobre los
+proyectos dev/prod**, con un `depends_on` del módulo de folders hacia esa
+habilitación. Resultado: un ciclo real — `google_project.this` depende del
+folder (`folder_id`), el folder ahora depende de la API-en-el-proyecto, y
+la API se habilita sobre un proyecto (dev/prod) que depende a su vez de que
+el folder ya exista.
+
+**El diagnóstico de fondo estaba mal apuntado.** La pregunta correcta con
+un error de API no habilitada en GCP no es "¿sobre qué recurso estoy
+operando?", sino "¿cuál es el *quota project* de la identidad que hace la
+llamada?". Las llamadas que fallaban (buscar la organización, crear
+folders) las hace `governance-admin-sa`, cuyo proyecto de origen es
+`excel-pipeline-seed` — dev/prod ni siquiera existen todavía en ese punto
+de la secuencia, así que habilitar algo sobre ellos no podía resolver nada.
+
+**Fix:** se revirtieron los dos `google_project_service` y sus `depends_on`
+en `governance`, y se agregaron `cloudresourcemanager.googleapis.com` y
+`cloudidentity.googleapis.com` al `gcloud services enable` que ya existía
+en `create-seed-wif.sh`, sobre el proyecto semilla — mismo lugar donde ya
+se habilitaban `iamcredentials`/`sts`.
+
+## 30. Un valor sensible no puede ser clave de un `for_each`
+
+Con lo anterior resuelto, apareció un error nuevo dentro del módulo de
+grupos:
+
+```
+Error: Invalid for_each argument
+var.members is list of string with 2 elements
+Sensitive values, or values derived from sensitive values, cannot be
+used as for_each arguments.
+```
+
+El módulo `terraform-google-group` arma internamente un
+`google_cloud_identity_group_membership` por miembro, usando el email de
+cada uno como clave del `for_each`. Terraform prohíbe categóricamente que
+una clave de `for_each`/`count` provenga de un valor `sensitive` — la clave
+queda expuesta en las direcciones de los recursos del state, y ahí no hay
+forma de redactarla. `personal_account_email` (marcada `sensitive`) rompía
+esto en las dos instancias de `infra-admins-{env}@`.
+
+**Fix:** `nonsensitive(var.personal_account_email)` solo en el punto donde
+se arma la lista de miembros — no se le sacó el flag `sensitive` a la
+variable en su declaración, así que sigue protegida en cualquier otro uso
+futuro. No era un secreto real de por sí; el flag era higiene contra
+hardcodearlo, algo que cargarlo como variable de workspace ya cubre por su
+cuenta, con o sin el flag.
+
+## 31. Primer apply real — folders creados, y el permiso que ningún IAM binding otorga
+
+Con todo lo anterior resuelto, el primer `apply` real llegó bastante más
+lejos: los folders `development` y `production` se crearon con éxito.
+Aparecieron dos problemas nuevos:
+
+**El folder `shared` ya existía** — quedó de un intento manual anterior que
+no se había limpiado (ver punto 21, donde se documentó que ese folder nunca
+se llegó a crear... resultó que sí, parcialmente, y no se detectó a tiempo).
+GCP no permite dos folders con el mismo nombre bajo el mismo padre. Sin
+código que arreglar acá — solo hacía falta borrar el folder viejo a mano
+antes de reintentar. Los folders que sí se crearon en este apply quedan en
+el state, no hace falta recrearlos.
+
+**Las 9 Cloud Identity Groups fallaron con `Error 403: Permission denied`**,
+a pesar de que `governance-admin-sa` ya tenía `folderCreator`,
+`projectCreator` y `billing.user` a nivel Organización. La hipótesis inicial
+fue que faltaba `roles/resourcemanager.organizationViewer` — descartada al
+verificar: ese rol es para acceso de un humano a la Consola, un contexto
+distinto.
+
+**La causa real, verificada contra la documentación oficial de Cloud
+Identity:** administrar Google Groups **no se autoriza por Cloud IAM en
+absoluto** — es un sistema de autorización separado, propio de la consola
+de administración de Google Workspace. Ningún `gcloud organizations
+add-iam-policy-binding` resuelve esto, sin importar qué rol se otorgue. La
+única forma es asignar el rol de administrador **"Groups Admin"** a la
+Service Account directamente desde `admin.google.com` (requiere acceso de
+Super Admin de Workspace) — un paso manual que ningún script de este
+proyecto puede cubrir, porque la API de administración de Workspace es un
+sistema aparte del que gestiona Terraform.
+
+Se documentó como prerequisito en `configs/seed-project-gcp/README.md` y
+`governance/README.md`, en vez de intentar resolverlo con más código.
+
 ---
 
 ## Lecciones aprendidas
@@ -691,3 +861,30 @@ en código — falta correrlo.
   el resto del sistema están deliberadamente separadas, hay que preguntarse
   explícitamente si el agrupador en sí también necesita esa separación —
   no alcanza con que las piezas de abajo estén bien aisladas.
+- **Un plan fallido no es lo mismo que un apply fallido.** Las secciones 27
+  a 30 son cuatro errores reales seguidos en los primeros intentos de
+  aplicar `governance` — conflicto de versiones de provider, token
+  faltante, un límite de 127 bytes no documentado en la guía principal de
+  GCP, un ciclo por mal diagnóstico de "quota project", una restricción del
+  lenguaje sobre valores sensibles. Ninguno tocó infraestructura real: un
+  `plan` que falla es inerte, no deja nada a medio crear. La mayoría de
+  estos son del tipo que solo aparece corriendo contra la API real, no
+  revisando código con cuidado — no hay forma realista de anticiparlos
+  todos de antemano sin haber pisado ya este terreno antes.
+- **Verificar el constraint de un módulo una vez no alcanza — hay que
+  volver a cruzarlo cada vez que se toca el archivo que lo declara.** El
+  conflicto de versión de la sección 27 pasó porque el `< 8` del módulo de
+  grupos ya se había verificado meses antes (al evaluarlo por primera vez),
+  pero no se volvió a cruzar al escribir `governance/terraform.tf` después
+  — se repitió el mismo `~> 8.1` que se había usado en `hcp/`, donde no
+  aplicaba esa restricción. Haber verificado algo una vez no lo vuelve
+  válido para siempre en un archivo distinto.
+- **No todo problema de permisos en GCP se resuelve con un IAM binding.**
+  La sección 31 es el ejemplo más claro de todo el proyecto: por más roles
+  de Cloud IAM que tuviera `governance-admin-sa` a nivel Organización,
+  ninguno le daba permiso para crear Cloud Identity Groups, porque ese
+  producto se autoriza desde un sistema completamente aparte (el Admin
+  Console de Google Workspace). Antes de asumir "necesito otro rol de IAM"
+  frente a un 403, vale la pena confirmar que el recurso en cuestión
+  efectivamente vive bajo el paraguas de Cloud IAM — no todos los productos
+  de Google lo hacen.

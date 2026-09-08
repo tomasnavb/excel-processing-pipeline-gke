@@ -25,3 +25,21 @@ need to exist before this one's WIF does.
    organization-level IAM roles that service account needs to create
    folders/projects. Prints the 6 `TFC_GCP_*` values to load manually as
    Environment Variables on that workspace once it's done.
+
+## Manual step the script can't cover: Groups Admin
+
+Cloud Identity Groups (created by `terraform/platform/governance/groups.tf`)
+aren't authorized through regular Cloud IAM — no `gcloud organizations
+add-iam-policy-binding` role grants a service account permission to create
+or manage them. That authorization lives in Google Workspace's own Admin
+Console, a separate system. Without this step, group creation fails with
+`Error 403: Permission denied for group resource '...'`, regardless of
+which IAM roles the service account already has.
+
+**One-time manual step** (needs Google Workspace Super Admin access):
+
+1. Go to `admin.google.com` → **Account → Admin roles**.
+2. Open the **Groups Admin** role.
+3. Assign it to `governance-admin-sa@excel-pipeline-seed.iam.gserviceaccount.com`
+   (the Admin Console lets you assign admin roles to service accounts by
+   email, not just human users).

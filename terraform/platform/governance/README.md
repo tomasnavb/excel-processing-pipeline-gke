@@ -5,6 +5,12 @@ configuration that touches GCP directly — it authenticates via Workload
 Identity Federation using the identity created manually in the `excel-pipeline-seed`
 project (see `configs/seed-project-gcp/`).
 
+**Prerequisite not covered by Terraform:** creating the Cloud Identity
+groups (`groups.tf`) requires `governance-admin-sa` to hold the **Groups
+Admin** role in the Google Workspace Admin Console — a separate
+authorization system from Cloud IAM, so no IAM role binding grants this.
+See [`configs/seed-project-gcp/README.md`](../../../configs/seed-project-gcp/README.md#manual-step-the-script-cant-cover-groups-admin).
+
 ## What this creates
 
 - The `development`, `production`, and `shared` folders under the
