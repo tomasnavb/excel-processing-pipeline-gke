@@ -16,5 +16,4 @@ resource "google_project" "this" {
   folder_id       = module.folders.ids[each.value.folder_name]
   billing_account = var.billing_account_id
 
-  depends_on = [google_project_service.resource_manager]
 }
