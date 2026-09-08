@@ -1,8 +1,8 @@
-resource "google_project_service" "resource_manager" {
+resource "google_project_service" "cloud_identity" {
   for_each = local.deployer_environments
 
   project = google_project.this[each.key].project_id
-  service = "cloudresourcemanager.googleapis.com"
+  service = "cloudidentity.googleapis.com"
 
   disable_on_destroy = false
 }
@@ -16,7 +16,7 @@ module "per_env_groups" {
   domain  = local.group_domain
   members = each.value.members
 
-  depends_on = [google_project_service.resource_manager]
+  depends_on = [google_project_service.cloud_identity]
 }
 
 # The only group that isn't split by environment — it targets exclusively
@@ -30,5 +30,5 @@ module "ci_cd_pipelines_group" {
   domain  = local.group_domain
   members = ["cloudbuild-deployer-sa@${local.projects["shared"].project_id}.iam.gserviceaccount.com"]
 
-  depends_on = [google_project_service.resource_manager]
+  depends_on = [google_project_service.cloud_identity]
 }
