@@ -845,6 +845,36 @@ la agregue (con `data "google_cloud_identity_group"`, sin re-declarar el
 grupo). `infra-admins-{env}@` es la única excepción — `sa-terraform-deployer`
 sí la crea `governance` en `wif.tf`, así que su membresía se queda ahí.
 
+## 33. Los 3 proyectos ya se crean bien — y aparece una quinta API, más un bug real de dependencia
+
+Con `cloudbilling` habilitada, los 3 proyectos (`excel-pipeline-dev/prod/shared`)
+se crearon con éxito por primera vez. Dos problemas nuevos:
+
+**Falta `iam.googleapis.com` en el proyecto semilla** — mismo patrón de
+quota project de siempre (puntos 29, 32): crear una Service Account o un
+Workload Identity Pool para dev/prod requiere esa API habilitada en el
+proyecto que hace la llamada. Se agregó al mismo `gcloud services enable`
+de `create-seed-wif.sh` (ya van cinco APIs ahí: `iamcredentials`, `sts`,
+`cloudresourcemanager`, `cloudidentity`, `cloudbilling`, `iam`).
+
+**Bug real, no solo un permiso faltante:** comparando los timestamps del
+log, la membresía de `sa-terraform-deployer` intentó crearse a las
+`15:09:42` — **28 segundos antes** de que `google_service_account.deployer["dev"]`
+empezara siquiera a crearse (`15:10:10`). En `locals.tf`, el email de esa
+SA se armaba con interpolación de string
+(`"${...}@${...}.iam.gserviceaccount.com"`) en vez de referenciar el
+recurso real. Un string armado a mano no genera una dependencia en el
+grafo de Terraform — el provider quedó libre de ejecutar la membresía y la
+creación de la SA en cualquier orden, sin garantía de cuál va primero. Es
+el mismo error que ya se había corregido una vez en `wif.tf` (ahí se
+referenciaba `google_iam_workload_identity_pool.deployer[...].name` en vez
+de reconstruir el path a mano) — se coló de nuevo en un lugar distinto.
+
+**Fix:** `google_service_account.deployer[pair[1]].email` en vez del
+string interpolado. Se revisó el resto de `governance/` en busca del mismo
+patrón (`grep` por emails armados con interpolación) — no apareció en
+ningún otro lado.
+
 ---
 
 ## Lecciones aprendidas
@@ -931,3 +961,13 @@ sí la crea `governance` en `wif.tf`, así que su membresía se queda ahí.
   membresía de grupos, y por la misma razón: `governance` no debería
   intentar gestionar la pertenencia de una identidad que no le pertenece
   ni que ella misma crea.
+- **Un identificador armado con interpolación de string nunca genera una
+  dependencia — solo una referencia directa al recurso lo hace.** Pasó dos
+  veces en este proyecto con el mismo tipo de error (`wif.tf` y, en la
+  sección 33, `locals.tf`): escribir `"${a}@${b}.dominio.com"` en vez de
+  `recurso.atributo` compila igual y en apariencia "funciona" en el plan,
+  pero Terraform no tiene forma de saber que ese string depende de que otro
+  recurso exista primero — el orden de ejecución queda librado al azar. La
+  regla práctica: si un valor *podría* obtenerse de un atributo de un
+  `resource` que ya está en el código, usar ese atributo — nunca
+  reconstruir el mismo dato a mano, aunque el resultado sea idéntico.

@@ -21,17 +21,19 @@ BILLING_ACCOUNT_ID=$(gcloud billing accounts list --filter="open=true" --format=
 BILLING_ACCOUNT_ID="${BILLING_ACCOUNT_ID#billingAccounts/}"
 
 # iamcredentials/sts: required for Workload Identity Federation itself.
-# cloudresourcemanager/cloudidentity/cloudbilling: required because this
-# project is the quota project for governance-admin-sa's calls (org lookup,
-# folder/group creation, checking billing account permissions when creating
-# a project) — those calls fail here, not on dev/prod, since dev/prod don't
-# exist yet when governance makes them.
+# cloudresourcemanager/cloudidentity/cloudbilling/iam: required because
+# this project is the quota project for governance-admin-sa's calls (org
+# lookup, folder/group creation, billing account checks, creating service
+# accounts and workload identity pools for dev/prod) — those calls fail
+# here, not on dev/prod, since dev/prod don't exist yet when governance
+# makes them.
 gcloud services enable \
   iamcredentials.googleapis.com \
   sts.googleapis.com \
   cloudresourcemanager.googleapis.com \
   cloudidentity.googleapis.com \
   cloudbilling.googleapis.com \
+  iam.googleapis.com \
   --project="$SEED_PROJECT_ID"
 
 # Workload Identity Pool (safe to re-run: skips creation if it already exists)

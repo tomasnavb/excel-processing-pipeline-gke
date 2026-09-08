@@ -40,7 +40,10 @@ locals {
       # its own group, the same way domains own their resource-scoped IAM
       # bindings instead of governance.
       members = pair[0] == "infra-admins" ? [
-        "${local.workload_sa_names[pair[0]]}@${local.projects[pair[1]].project_id}.iam.gserviceaccount.com",
+        # A resource reference, not a hand-built string — a literal string
+        # here creates no dependency, so Terraform could (and did, once)
+        # try to add this membership before the SA itself existed.
+        google_service_account.deployer[pair[1]].email,
         # nonsensitive(): the group module keys a for_each on each member's
         # email internally, and Terraform categorically forbids sensitive
         # values as for_each keys. Not a real secret to begin with — the
