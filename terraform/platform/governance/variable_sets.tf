@@ -2,11 +2,6 @@
 # terraform/platform/hcp/ already created, so the 8 domain workspaces
 # inherit real GCP credentials automatically — no manual step per project.
 
-provider "tfe" {
-  hostname     = "app.terraform.io"
-  organization = var.hcp_organization_name
-}
-
 data "tfe_variable_set" "credentials" {
   for_each = local.deployer_environments
 
