@@ -15,7 +15,9 @@ module "ci_cd_pipelines_group" {
   source  = "terraform-google-modules/group/google"
   version = "~> 0.8"
 
-  id      = "ci-cd-pipelines@${local.group_domain}"
-  domain  = local.group_domain
-  members = ["cloudbuild-deployer-sa@${local.projects["shared"].project_id}.iam.gserviceaccount.com"]
+  id     = "ci-cd-pipelines@${local.group_domain}"
+  domain = local.group_domain
+  # Empty for now: cloudbuild-deployer-sa doesn't exist yet — whichever
+  # domain creates it is responsible for adding it to this group.
+  members = []
 }

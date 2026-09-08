@@ -33,16 +33,22 @@ locals {
   per_env_groups = {
     for pair in setproduct(keys(local.workload_sa_names), ["dev", "prod"]) :
     "${pair[0]}-${pair[1]}" => {
-      members = concat(
-        ["${local.workload_sa_names[pair[0]]}@${local.projects[pair[1]].project_id}.iam.gserviceaccount.com"],
+      # Only infra-admins gets members here: sa-terraform-deployer is the
+      # one SA governance itself creates (wif.tf). worker-gke-sa/
+      # api-runtime-sa/excel-client-sa don't exist yet — the domain that
+      # creates each one (gke, cloud-run) is responsible for adding it to
+      # its own group, the same way domains own their resource-scoped IAM
+      # bindings instead of governance.
+      members = pair[0] == "infra-admins" ? [
+        "${local.workload_sa_names[pair[0]]}@${local.projects[pair[1]].project_id}.iam.gserviceaccount.com",
         # nonsensitive(): the group module keys a for_each on each member's
         # email internally, and Terraform categorically forbids sensitive
         # values as for_each keys. Not a real secret to begin with — the
         # sensitive flag on the variable was just hygiene against
         # hardcoding it, which loading it as a workspace variable already
         # covers regardless of this flag.
-        pair[0] == "infra-admins" ? [nonsensitive(var.personal_account_email)] : []
-      )
+        nonsensitive(var.personal_account_email),
+      ] : []
     }
   }
 

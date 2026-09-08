@@ -811,6 +811,40 @@ sistema aparte del que gestiona Terraform.
 Se documentó como prerequisito en `configs/seed-project-gcp/README.md` y
 `governance/README.md`, en vez de intentar resolverlo con más código.
 
+## 32. El rol de Groups Admin funcionó — y aparecieron dos problemas más
+
+Con el rol asignado, las 9 groups se crearon con éxito. Dos problemas
+nuevos, distintos entre sí:
+
+**Los 3 `google_project` fallaron por Cloud Billing API.**
+`failed to check permissions on billing account ...: Cloud Billing API has
+not been used in project 910394319354`. Exactamente el mismo patrón de
+"quota project" del punto 29: crear un proyecto con una cuenta de
+facturación asociada requiere `cloudbilling.googleapis.com` habilitada en
+el proyecto **que hace la llamada** (el proyecto semilla), no en el
+proyecto que se está creando. Se agregó `cloudbilling.googleapis.com` al
+mismo `gcloud services enable` de `create-seed-wif.sh` que ya tenía las
+otras tres APIs de "quota project".
+
+**Todas las membresías de Service Account fallaron**, menos las dos de la
+cuenta personal. El mensaje — `Permission denied ... or it may not exist`
+— fue la pista: no era un problema de permisos nuevo, sino que
+`worker-gke-sa`, `api-runtime-sa`, `excel-client-sa` y
+`cloudbuild-deployer-sa` **todavía no existen en GCP** — ningún código las
+crea todavía, están reservadas para cuando se escriban `terraform/domains/gke`
+y `terraform/domains/cloud-run`. (`sa-terraform-deployer` también falló en
+esta corrida, pero por una razón distinta y ya resuelta: dependía del
+proyecto, que falló por el billing de arriba.)
+
+**Fix:** se aplicó el mismo criterio de "quien crea el recurso lo agrega al
+grupo" que ya regía para los roles (punto 17). `governance` deja de
+intentar agregar esos 4 miembros — `gke-workloads-{env}@`,
+`app-runtime-{env}@`, `api-invokers-{env}@` y `ci-cd-pipelines@` quedan
+creados pero **vacíos** hasta que el domain correspondiente cree su SA y
+la agregue (con `data "google_cloud_identity_group"`, sin re-declarar el
+grupo). `infra-admins-{env}@` es la única excepción — `sa-terraform-deployer`
+sí la crea `governance` en `wif.tf`, así que su membresía se queda ahí.
+
 ---
 
 ## Lecciones aprendidas
@@ -888,3 +922,12 @@ Se documentó como prerequisito en `configs/seed-project-gcp/README.md` y
   frente a un 403, vale la pena confirmar que el recurso en cuestión
   efectivamente vive bajo el paraguas de Cloud IAM — no todos los productos
   de Google lo hacen.
+- **"Permission denied ... or it may not exist" a veces significa
+  literalmente eso: no existe.** En la sección 32, el error de las
+  membresías de grupo parecía uno más de permisos — pero la causa real era
+  que las Service Accounts referenciadas todavía no estaban creadas en
+  ningún código. El principio de "quien crea el recurso es quien lo
+  vincula" (ya aplicado a los roles en el punto 17) también aplica a la
+  membresía de grupos, y por la misma razón: `governance` no debería
+  intentar gestionar la pertenencia de una identidad que no le pertenece
+  ni que ella misma crea.

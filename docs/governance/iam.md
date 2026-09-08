@@ -21,15 +21,25 @@ no dev/prod boundary to leak across.
 
 | Group | Purpose | Members |
 |---|---|---|
-| `gke-workloads-dev@tomasnavarro.dev` | GKE worker's application code (Workload Identity) — dev | `worker-gke-sa` (dev project) |
-| `gke-workloads-prod@tomasnavarro.dev` | Same, prod | `worker-gke-sa` (prod project) |
-| `app-runtime-dev@tomasnavarro.dev` | Cloud Run API's application code — dev | `api-runtime-sa` (dev project) |
-| `app-runtime-prod@tomasnavarro.dev` | Same, prod | `api-runtime-sa` (prod project) |
+| `gke-workloads-dev@tomasnavarro.dev` | GKE worker's application code (Workload Identity) — dev | *(empty — added by `terraform/domains/gke` when it creates `worker-gke-sa`)* |
+| `gke-workloads-prod@tomasnavarro.dev` | Same, prod | *(empty — same, prod)* |
+| `app-runtime-dev@tomasnavarro.dev` | Cloud Run API's application code — dev | *(empty — added by `terraform/domains/cloud-run` when it creates `api-runtime-sa`)* |
+| `app-runtime-prod@tomasnavarro.dev` | Same, prod | *(empty — same, prod)* |
 | `infra-admins-dev@tomasnavarro.dev` | Creates and manages infrastructure — dev | `sa-terraform-deployer` (dev project), personal account |
 | `infra-admins-prod@tomasnavarro.dev` | Same, prod | `sa-terraform-deployer` (prod project), personal account |
-| `api-invokers-dev@tomasnavarro.dev` | Authorized to call the dev Cloud Run API | `excel-client-sa` (dev project) |
-| `api-invokers-prod@tomasnavarro.dev` | Authorized to call the prod Cloud Run API | `excel-client-sa` (prod project) |
-| `ci-cd-pipelines@tomasnavarro.dev` | Builds and pushes container images | `cloudbuild-deployer-sa` (shared project) |
+| `api-invokers-dev@tomasnavarro.dev` | Authorized to call the dev Cloud Run API | *(empty — added by `terraform/domains/cloud-run` when it creates `excel-client-sa`)* |
+| `api-invokers-prod@tomasnavarro.dev` | Authorized to call the prod Cloud Run API | *(empty — same, prod)* |
+| `ci-cd-pipelines@tomasnavarro.dev` | Builds and pushes container images | *(empty — added by whichever domain creates `cloudbuild-deployer-sa`)* |
+
+`infra-admins-{env}@` is the only group `governance` populates directly —
+`sa-terraform-deployer` is the one SA `governance` itself creates
+(`wif.tf`). Every other group starts empty: adding a member for a
+service account that doesn't exist yet fails outright (GCP returns
+`Permission denied ... or it may not exist` — a real error hit on the
+first apply, see the devlog). Membership follows the same ownership split
+as the roles below — whichever domain creates a given SA is responsible
+for adding it to its group, via a `data "google_cloud_identity_group"`
+lookup rather than re-declaring the group.
 
 ## Roles per group
 

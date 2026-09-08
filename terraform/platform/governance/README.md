@@ -20,6 +20,8 @@ See [`configs/seed-project-gcp/README.md`](../../../configs/seed-project-gcp/REA
 - The 9 Cloud Identity groups (split by environment where the underlying
   service account exists once per project — see
   [`docs/governance/iam.md`](../../../docs/governance/iam.md) for why).
+  Only `infra-admins-{env}@` gets members here — the others start empty
+  until the domain that creates their SA adds it.
 - The `infra-admins-{env}@` project-level IAM bindings.
 - A per-project Workload Identity Pool/Provider/Service Account
   (`sa-terraform-deployer`) in `excel-pipeline-dev` and `excel-pipeline-prod`
@@ -36,6 +38,9 @@ See [`configs/seed-project-gcp/README.md`](../../../configs/seed-project-gcp/REA
 - Grant any of the resource-scoped roles (`gke-workloads-{env}@`,
   `app-runtime-{env}@`, `api-invokers-{env}@`, `ci-cd-pipelines@`) — those
   are attached by whichever domain creates the resource they target.
+- Add members to those same 4 groups — same reason: `worker-gke-sa`,
+  `api-runtime-sa`, `excel-client-sa`, and `cloudbuild-deployer-sa` don't
+  exist yet, so whichever domain creates each one adds it to its group.
 
 ## Required workspace variables
 
