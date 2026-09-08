@@ -9,6 +9,4 @@ module "folders" {
   # level (see iam.tf) — the module's own role-granting feature defaults
   # to roles/owner at the folder level, far broader than what we want.
   set_roles = false
-
-  depends_on = [google_project_service.resource_manager]
 }

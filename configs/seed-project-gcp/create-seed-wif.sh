@@ -20,8 +20,16 @@ SEED_PROJECT_NUMBER=$(gcloud projects describe "$SEED_PROJECT_ID" --format="valu
 BILLING_ACCOUNT_ID=$(gcloud billing accounts list --filter="open=true" --format="value(name)" --limit=1)
 BILLING_ACCOUNT_ID="${BILLING_ACCOUNT_ID#billingAccounts/}"
 
-# APIs required for Workload Identity Federation
-gcloud services enable iamcredentials.googleapis.com sts.googleapis.com \
+# iamcredentials/sts: required for Workload Identity Federation itself.
+# cloudresourcemanager/cloudidentity: required because this project is the
+# quota project for governance-admin-sa's calls (org lookup, folder and
+# group creation) — those calls fail here, not on dev/prod, since dev/prod
+# don't exist yet when governance makes them.
+gcloud services enable \
+  iamcredentials.googleapis.com \
+  sts.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  cloudidentity.googleapis.com \
   --project="$SEED_PROJECT_ID"
 
 # Workload Identity Pool (safe to re-run: skips creation if it already exists)
@@ -43,7 +51,7 @@ if ! gcloud iam workload-identity-pools providers describe "$WIF_PROVIDER_ID" \
     --location="global" \
     --workload-identity-pool="$WIF_POOL_ID" \
     --issuer-uri="https://app.terraform.io" \
-    --attribute-mapping="google.subject=assertion.sub,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name,attribute.terraform_project_id=assertion.terraform_project_id,attribute.terraform_project_name=assertion.terraform_project_name,attribute.terraform_workspace_id=assertion.terraform_workspace_id,attribute.terraform_workspace_name=assertion.terraform_workspace_name" \
+    --attribute-mapping="google.subject=assertion.terraform_workspace_id,attribute.terraform_organization_id=assertion.terraform_organization_id,attribute.terraform_organization_name=assertion.terraform_organization_name,attribute.terraform_project_id=assertion.terraform_project_id,attribute.terraform_project_name=assertion.terraform_project_name,attribute.terraform_workspace_id=assertion.terraform_workspace_id,attribute.terraform_workspace_name=assertion.terraform_workspace_name" \
     --attribute-condition="assertion.sub.startsWith(\"organization:${TFC_ORG_NAME}:project:${TFC_PROJECT_NAME}:workspace:${TFC_WORKSPACE_NAME}:\")"
 fi
 

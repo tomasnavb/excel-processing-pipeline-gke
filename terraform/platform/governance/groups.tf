@@ -1,12 +1,3 @@
-resource "google_project_service" "cloud_identity" {
-  for_each = local.deployer_environments
-
-  project = google_project.this[each.key].project_id
-  service = "cloudidentity.googleapis.com"
-
-  disable_on_destroy = false
-}
-
 module "per_env_groups" {
   source   = "terraform-google-modules/group/google"
   version  = "~> 0.8"
@@ -15,8 +6,6 @@ module "per_env_groups" {
   id      = "${each.key}@${local.group_domain}"
   domain  = local.group_domain
   members = each.value.members
-
-  depends_on = [google_project_service.cloud_identity]
 }
 
 # The only group that isn't split by environment — it targets exclusively
@@ -29,6 +18,4 @@ module "ci_cd_pipelines_group" {
   id      = "ci-cd-pipelines@${local.group_domain}"
   domain  = local.group_domain
   members = ["cloudbuild-deployer-sa@${local.projects["shared"].project_id}.iam.gserviceaccount.com"]
-
-  depends_on = [google_project_service.cloud_identity]
 }
