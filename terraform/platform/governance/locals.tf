@@ -35,7 +35,13 @@ locals {
     "${pair[0]}-${pair[1]}" => {
       members = concat(
         ["${local.workload_sa_names[pair[0]]}@${local.projects[pair[1]].project_id}.iam.gserviceaccount.com"],
-        pair[0] == "infra-admins" ? [var.personal_account_email] : []
+        # nonsensitive(): the group module keys a for_each on each member's
+        # email internally, and Terraform categorically forbids sensitive
+        # values as for_each keys. Not a real secret to begin with — the
+        # sensitive flag on the variable was just hygiene against
+        # hardcoding it, which loading it as a workspace variable already
+        # covers regardless of this flag.
+        pair[0] == "infra-admins" ? [nonsensitive(var.personal_account_email)] : []
       )
     }
   }
