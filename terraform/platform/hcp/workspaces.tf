@@ -47,3 +47,24 @@ resource "tfe_variable" "governance_hcp_organization_name" {
   value        = var.hcp_organization_name
   category     = "terraform"
 }
+
+# Builds and pushes container images, and will own the Cloud Build ->
+# GitHub connection. Lives in the shared project since it's the one domain
+# workspace that isn't scoped to dev or prod.
+resource "tfe_workspace" "registry" {
+  name              = "excel-pipeline-registry-shared"
+  organization      = var.hcp_organization_name
+  project_id        = tfe_project.shared.id
+  working_directory = "terraform/domains/registry/shared"
+  auto_apply        = false
+
+  vcs_repo {
+    identifier     = var.vcs_repo_identifier
+    oauth_token_id = var.github_oauth_token_id
+  }
+
+  trigger_patterns = [
+    "terraform/domains/registry/shared/**",
+    "terraform/modules/**",
+  ]
+}

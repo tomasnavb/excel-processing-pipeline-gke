@@ -8,12 +8,15 @@ that runs in the bootstrap chain, since it creates the workspace that
 
 ## What this creates
 
-- The `dev` and `prod` HCP Terraform Projects.
+- The `dev`, `prod`, and `shared` HCP Terraform Projects.
 - One workspace per domain (`networking`, `gke`, `data`, `cloud-run`) inside
-  each of those two projects — 8 total.
+  the `dev`/`prod` projects — 8 total.
+- The `excel-pipeline-registry-shared` workspace, inside the `shared`
+  project — the one domain workspace that isn't scoped to dev or prod
+  (Artifact Registry, and the Cloud Build ↔ GitHub connection).
 - The `excel-pipeline-governance-mgmt` workspace, inside the manually
   created mgmt project.
-- The custom GitHub OAuth connection's usage across all 9 workspaces above.
+- The custom GitHub OAuth connection's usage across all 10 workspaces above.
 - An empty `tfe_variable_set` per environment (`dev`, `prod`), attached to
   its respective project. Populated later by `governance`, once it creates
   the per-project GCP identities those variable sets need to hold.
