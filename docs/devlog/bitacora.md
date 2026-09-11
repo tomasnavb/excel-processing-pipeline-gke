@@ -875,6 +875,81 @@ string interpolado. Se revisó el resto de `governance/` en busca del mismo
 patrón (`grep` por emails armados con interpolación) — no apareció en
 ningún otro lado.
 
+## 34. Diseño del dominio `registry/shared`: Cloud Build nativo, y `data` vs `tfe_outputs`
+
+Al planear cómo construir imágenes y publicarlas en Artifact Registry, surgieron
+dos decisiones de diseño independientes.
+
+**Opción A vs Opción B para CI:** se evaluó GitHub Actions con WIF propio
+(Opción B) contra Cloud Build 2nd-gen autenticado directamente contra GitHub
+(Opción A, `google_cloudbuildv2_connection`). Se eligió la **Opción A**: evita
+mantener un segundo mecanismo de identidad federada aparte del que ya se usa
+para HCP Terraform, y los triggers se crean por código una vez resuelta la
+conexión manual — mismo patrón ya aceptado en la sección 20 para la conexión
+VCS de HCP Terraform (un paso manual de autorización, el resto en Terraform).
+
+**`data` vs `tfe_outputs` para compartir datos entre configuraciones de
+Terraform:** se investigó (documentación oficial + artículos) para asentar el
+criterio, hasta ahora aplicado de forma intuitiva sin haberlo verificado
+explícitamente. Conclusión:
+- `data` blocks: solo para recursos que **ninguna** configuración de Terraform
+  de este proyecto gestiona — ya sea porque son externos (`data
+  "google_organization"`) o porque pertenecen a un state ajeno cuyo objeto en
+  sí no es el output de interés, sino su existencia (`data "tfe_project"
+  "mgmt"`, para ubicar workspaces nuevas ahí sin importar ese proyecto al
+  propio state — ver sección 15).
+- `tfe_outputs`: para leer valores de **salida** de una workspace hermana que
+  sí gestiona el recurso con Terraform — el caso de uso real y todavía
+  pendiente es `gke` leyendo el ID de la VPC/subnet que crea `networking`.
+
+El patrón ya en uso en el proyecto resultó correcto sin cambios; esta
+investigación solo lo deja documentado con criterio explícito para no tener
+que redecidirlo cada vez que aparezca un caso nuevo.
+
+## 35. Extensión de `hcp` y `governance` para el proyecto `shared`
+
+Con el diseño anterior resuelto, se extendió el código ya existente en vez de
+crear una estructura paralela:
+
+- **`hcp/`**: `tfe_project.shared` (standalone, fuera del `for_each` de
+  dev/prod — solo aloja una workspace, no el patrón domain×entorno completo),
+  `tfe_workspace.registry` (`working_directory =
+  "terraform/domains/registry/shared"`), y un `tfe_variable_set.shared_credentials`
+  + `tfe_project_variable_set` standalone, mismo mecanismo que ya existía para
+  dev/prod (sección 11).
+- **`governance/`**: se extendió `local.deployer_environments` para incluir
+  `"shared"` — el WIF genérico de `wif.tf` (pool/provider/SA por proyecto, ver
+  sección 25) no necesitó ningún cambio de lógica, solo el nuevo elemento en
+  el set de entornos. Se agregó el grupo `registry-admins@` (`sa-terraform-deployer`
+  del proyecto shared como único miembro) con sus 4 roles de proyecto
+  (`artifactregistry.admin`, `cloudbuild.connectionAdmin`,
+  `cloudbuild.builds.editor`, `iam.serviceAccountAdmin`) — un grupo distinto de
+  `ci-cd-pipelines@` (que sigue reservado para `cloudbuild-deployer-sa`, la
+  identidad que corre los *builds*, no la que aplica Terraform sobre ese
+  dominio).
+
+Ambos applies (`hcp-mgmt` y `governance-mgmt`) corrieron sin errores nuevos.
+
+## 36. La conexión OAuth GitHub↔HCP Terraform se rompió sola, y una hipótesis descartada
+
+Al crear `tfe_workspace.registry` (sección 35), el apply falló con
+`"Repository doesn't exist or isn't accessible"` sobre el mismo repo que las
+otras 9 workspaces ya venían usando sin problema desde la conexión manual de
+la sección 20.
+
+**Hipótesis inicial, descartada:** que fuera un delay de propagación por
+tratarse de un proyecto (`shared`) recién creado. No era eso — el proyecto
+nuevo no tiene ninguna relación con qué conexiones VCS están disponibles a
+nivel organización, y las otras workspaces del mismo proyecto no mostraban
+ningún síntoma de estar "esperando" nada.
+
+**Causa real:** la conexión OAuth con GitHub, que llevaba semanas funcionando
+sin tocarse, se había desconectado del lado de GitHub — no por expiración
+normal de token, sino una desconexión efectiva de la integración instalada.
+**Fix:** reinstalar/reautorizar la OAuth application desde el lado de HCP
+Terraform (Organization Settings → VCS Providers). Una vez reautorizada, el
+apply de `tfe_workspace.registry` funcionó sin cambiar nada del código.
+
 ---
 
 ## Lecciones aprendidas
@@ -971,3 +1046,11 @@ ningún otro lado.
   regla práctica: si un valor *podría* obtenerse de un atributo de un
   `resource` que ya está en el código, usar ese atributo — nunca
   reconstruir el mismo dato a mano, aunque el resultado sea idéntico.
+- **No confiar en el pattern-matching contra un problema anterior parecido
+  sin verificar la causa real.** En la sección 36, el error de la workspace
+  `registry` se parecía superficialmente a "recurso recién creado, todavía no
+  propagado" — pero la causa era otra por completo (una integración externa
+  que se había desconectado del lado de GitHub, sin relación con qué proyecto
+  de HCP Terraform era nuevo). Una hipótesis que "suena plausible" por
+  parecerse a un caso previo puede llevar a descartar la investigación real
+  demasiado pronto.

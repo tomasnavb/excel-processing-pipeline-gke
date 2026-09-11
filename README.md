@@ -87,6 +87,8 @@ organizational concept for grouping workspaces, unrelated to a GCP Project.
 │   ├── excel-pipeline-gke-prod (Workspace)
 │   ├── excel-pipeline-data-prod (Workspace)
 │   └── excel-pipeline-cloud-run-prod (Workspace)
+├── excel-processing-pipeline-gke-shared (Project)
+│   └── excel-pipeline-registry-shared (Workspace)
 └── excel-processing-pipeline-gke-mgmt (Project)
     ├── excel-pipeline-hcp-mgmt (Workspace)
     └── excel-pipeline-governance-mgmt (Workspace)
@@ -100,32 +102,36 @@ organizational concept for grouping workspaces, unrelated to a GCP Project.
 
 - [x] Architecture defined; repo structure and GCP/HCP Terraform naming
       conventions established.
-- [x] `terraform/platform/hcp/`: creates the `dev`/`prod` HCP Terraform
-      projects and their 8 domain workspaces via `for_each`, connects them
-      to a custom GitHub OAuth connection, and drives it all from a
-      manually bootstrapped management workspace.
+- [x] `terraform/platform/hcp/`: creates the `dev`/`prod`/`shared` HCP
+      Terraform projects and their workspaces (8 domain workspaces plus
+      `registry-shared`) via `for_each`, connects them to a custom GitHub
+      OAuth connection, and drives it all from a manually bootstrapped
+      management workspace.
 - [x] GCP organization set up under a Cloud Identity Free domain; the
       `bootstrap` folder and seed project created, with their own Workload
       Identity Pool/Provider and service account for governance's auth.
 - [x] `terraform/platform/governance/`: creates the `development`/
-      `production`/`shared` folders and their GCP projects, the 9 Cloud
-      Identity groups (split by environment where needed), project-level
-      IAM for `infra-admins`, and a per-project Workload Identity
-      Pool/Provider/service account for the domain workspaces to use.
+      `production`/`shared` folders and their GCP projects, the 10 Cloud
+      Identity groups (split by environment where needed, plus
+      `registry-admins@`), project-level IAM for `infra-admins` and
+      `registry-admins`, and a per-project Workload Identity
+      Pool/Provider/service account — including `shared` — for the domain
+      workspaces to use.
 - [x] IAM groups/roles reference table and diagramming style guide.
 - [x] Architecture diagram.
 
 ### Next steps
 
-- [ ] Artifact Registry in the shared project, with cross-project IAM for
-      GKE/Cloud Run image pulls.
+- [ ] `terraform/domains/networking`: VPC and subnets for dev/prod.
+- [ ] `terraform/domains/registry/shared`: the Artifact Registry repo, the
+      Cloud Build ↔ GitHub connection (2nd-gen), and build triggers.
 - [ ] Resource-scoped IAM bindings (`gke-workloads`, `app-runtime`,
       `api-invokers`, `ci-cd-pipelines` roles), attached by each domain as
       it creates its own resources.
-- [ ] `terraform/domains/{networking,gke,data,cloud-run}` implementation
-      (currently scaffolded, not yet implemented).
+- [ ] `terraform/domains/{gke,data,cloud-run}` implementation (currently
+      scaffolded, not yet implemented).
 - [ ] The FastAPI API and the GKE worker.
-- [ ] Kustomize manifests and Cloud Build pipelines.
+- [ ] Kustomize manifests.
 
 A detailed, chronological log of decisions and problems solved along the way
 lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).

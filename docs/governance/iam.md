@@ -30,16 +30,24 @@ no dev/prod boundary to leak across.
 | `api-invokers-dev@tomasnavarro.dev` | Authorized to call the dev Cloud Run API | *(empty — added by `terraform/domains/cloud-run` when it creates `excel-client-sa`)* |
 | `api-invokers-prod@tomasnavarro.dev` | Authorized to call the prod Cloud Run API | *(empty — same, prod)* |
 | `ci-cd-pipelines@tomasnavarro.dev` | Builds and pushes container images | *(empty — added by whichever domain creates `cloudbuild-deployer-sa`)* |
+| `registry-admins@tomasnavarro.dev` | Creates and manages the shared registry domain's own resources | `sa-terraform-deployer` (shared project) |
 
-`infra-admins-{env}@` is the only group `governance` populates directly —
-`sa-terraform-deployer` is the one SA `governance` itself creates
-(`wif.tf`). Every other group starts empty: adding a member for a
-service account that doesn't exist yet fails outright (GCP returns
-`Permission denied ... or it may not exist` — a real error hit on the
-first apply, see the devlog). Membership follows the same ownership split
-as the roles below — whichever domain creates a given SA is responsible
-for adding it to its group, via a `data "google_cloud_identity_group"`
-lookup rather than re-declaring the group.
+`infra-admins-{env}@` and `registry-admins@` are the only groups
+`governance` populates directly — both members are Terraform-deployer SAs
+that `governance` itself creates (`wif.tf`), one per project including
+`shared`. Every other group starts empty: adding a member for a service
+account that doesn't exist yet fails outright (GCP returns `Permission
+denied ... or it may not exist` — a real error hit on the first apply, see
+the devlog). Membership follows the same ownership split as the roles
+below — whichever domain creates a given SA is responsible for adding it
+to its group, via a `data "google_cloud_identity_group"` lookup rather
+than re-declaring the group.
+
+`registry-admins@` is not the same identity as `ci-cd-pipelines@`:
+`sa-terraform-deployer` (shared) runs Terraform to create the registry
+domain's resources, while `cloudbuild-deployer-sa` (added to
+`ci-cd-pipelines@` once `terraform/domains/registry/shared` creates it)
+runs the actual builds.
 
 ## Roles per group
 
@@ -58,11 +66,15 @@ lookup rather than re-declaring the group.
 | `app-runtime-{env}@` | `roles/storage.objectAdmin` | The `excel-pipeline-{env}-jobs` bucket | `terraform/domains/data` |
 | `ci-cd-pipelines@` | `roles/artifactregistry.writer` | The `excel-pipeline-images` repository | `terraform/domains/cloud-run` |
 | `api-invokers-{env}@` | `roles/run.invoker` | The specific `excel-pipeline-api-{env}` service | `terraform/domains/cloud-run` |
+| `registry-admins@` | `roles/artifactregistry.admin` | The `shared` project | `terraform/platform/governance` |
+| `registry-admins@` | `roles/cloudbuild.connectionAdmin` | The `shared` project | `terraform/platform/governance` |
+| `registry-admins@` | `roles/cloudbuild.builds.editor` | The `shared` project | `terraform/platform/governance` |
+| `registry-admins@` | `roles/iam.serviceAccountAdmin` | The `shared` project | `terraform/platform/governance` |
 
 ## Why the split between `governance` and each domain
 
 `governance` owns the GCP projects themselves, so project-level grants
-(`infra-admins-{env}@`) live there. Every other role targets a specific
+(`infra-admins-{env}@`, `registry-admins@`) live there. Every other role targets a specific
 resource (a bucket, a subscription, a Cloud Run service, an Artifact
 Registry repo) that `governance` doesn't create — those bindings are
 attached by whichever domain creates that resource, referencing the group
