@@ -9,3 +9,13 @@ resource "google_project_iam_member" "infra_admins" {
   role    = each.value.role
   member  = "group:${module.per_env_groups["infra-admins-${each.value.environment}"].id}"
 }
+
+# registry-admins@ — project-level, same reasoning: governance creates the
+# shared project, so these bindings live here too.
+resource "google_project_iam_member" "registry_admins" {
+  for_each = toset(local.registry_admin_roles)
+
+  project = google_project.this["shared"].project_id
+  role    = each.value
+  member  = "group:${module.registry_admins_group.id}"
+}

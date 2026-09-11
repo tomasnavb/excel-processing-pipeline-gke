@@ -21,3 +21,15 @@ module "ci_cd_pipelines_group" {
   # domain creates it is responsible for adding it to this group.
   members = []
 }
+
+# sa-terraform-deployer (shared) — creates the registry domain's own
+# resources. Not the same identity as cloudbuild-deployer-sa above: this
+# one runs Terraform, that one runs builds.
+module "registry_admins_group" {
+  source  = "terraform-google-modules/group/google"
+  version = "~> 0.8"
+
+  id      = "registry-admins@${local.group_domain}"
+  domain  = local.group_domain
+  members = [google_service_account.deployer["shared"].email]
+}

@@ -74,16 +74,32 @@ locals {
     }
   }
 
-  # dev/prod only — shared has no domain workspaces deploying into it, so
-  # it doesn't need its own deployer identity.
-  deployer_environments = toset(["dev", "prod"])
+  # dev, prod, and now shared (the registry domain's own deployer). The
+  # infra-admins roles below stay on their own separate ["dev", "prod"]
+  # literal, so extending this set doesn't cascade those 6 roles into
+  # shared — wif.tf's identity plumbing is generic and applies the same
+  # way regardless of what each project's deployer is actually for.
+  deployer_environments = toset(["dev", "prod", "shared"])
 
   # The HCP Terraform Projects created in terraform/platform/hcp/, one per
-  # environment, containing exactly that environment's 4 domain workspaces.
+  # environment, containing that environment's workspace(s).
   hcp_project_names = {
-    dev  = "excel-processing-pipeline-gke-dev"
-    prod = "excel-processing-pipeline-gke-prod"
+    dev    = "excel-processing-pipeline-gke-dev"
+    prod   = "excel-processing-pipeline-gke-prod"
+    shared = "excel-processing-pipeline-gke-shared"
   }
+
+  # sa-terraform-deployer in excel-pipeline-shared: creates the Artifact
+  # Registry repo, the Cloud Build <-> GitHub connection/repository, and
+  # cloudbuild-deployer-sa itself — not the same role set as infra-admins,
+  # so it gets its own group (registry-admins@) instead of reusing that
+  # one under a "-shared" suffix.
+  registry_admin_roles = [
+    "roles/artifactregistry.admin",
+    "roles/cloudbuild.connectionAdmin",
+    "roles/cloudbuild.builds.editor",
+    "roles/iam.serviceAccountAdmin",
+  ]
 
   tfc_gcp_credentials = {
     for env in local.deployer_environments : env => {
