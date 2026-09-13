@@ -133,4 +133,20 @@ locals {
       value = google_project.this[env].project_id
     }
   }
+
+  # APIs domain workspaces need enabled on their own project to create
+  # resources — as opposed to wif.tf's iamcredentials/sts, which are
+  # prerequisites of the WIF pool/provider defined there. Extend this list
+  # as new domains land (container.googleapis.com for gke,
+  # run.googleapis.com for cloud-run, pubsub.googleapis.com/
+  # firestore.googleapis.com for data) — no new resource block needed.
+  project_apis = ["compute.googleapis.com"]
+
+  project_api_bindings = {
+    for pair in setproduct(["dev", "prod"], local.project_apis) :
+    "${pair[0]}-${replace(pair[1], ".", "-")}" => {
+      environment = pair[0]
+      api         = pair[1]
+    }
+  }
 }
