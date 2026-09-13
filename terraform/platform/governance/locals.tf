@@ -124,4 +124,13 @@ locals {
       ]
     ]) : entry.instance_key => entry
   }
+
+  # project_id per project — same variable-set channel as tfc_gcp_credentials
+  # above, so every domain workspace inherits its project ID without it
+  # being typed in by hand.
+  project_id_variable_instances = {
+    for env in local.deployer_environments : env => {
+      value = google_project.this[env].project_id
+    }
+  }
 }
