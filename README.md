@@ -52,47 +52,23 @@ demonstrate an infrastructure approach, not to replace the original system.
 
 Diagrams follow the conventions in [`docs/architecture/style-guide.md`](docs/architecture/style-guide.md).
 
-### GCP resource hierarchy
+### Platform foundation
 
 ![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?logo=googlecloud&logoColor=white)
-
-```
-tomasnavarro.dev (Organization)
-├── development (Folder)
-│   └── excel-pipeline-dev (Project)
-├── production (Folder)
-│   └── excel-pipeline-prod (Project)
-├── bootstrap (Folder)
-│   └── excel-pipeline-seed (Project)
-└── shared (Folder)
-    └── excel-pipeline-shared (Project)
-```
-
-### HCP Terraform resource hierarchy
-
 ![HCP Terraform](https://img.shields.io/badge/HCP_Terraform-7B42BC?logo=terraform&logoColor=white)
 
-A separate hierarchy from the one above — an HCP Terraform "Project" is an
-organizational concept for grouping workspaces, unrelated to a GCP Project.
+![Platform foundation diagram](docs/architecture/platform-foundation.png)
 
-```
-<hcp-terraform-org> (Organization)
-├── excel-processing-pipeline-gke-dev (Project)
-│   ├── excel-pipeline-networking-dev (Workspace)
-│   ├── excel-pipeline-gke-dev (Workspace)
-│   ├── excel-pipeline-data-dev (Workspace)
-│   └── excel-pipeline-cloud-run-dev (Workspace)
-├── excel-processing-pipeline-gke-prod (Project)
-│   ├── excel-pipeline-networking-prod (Workspace)
-│   ├── excel-pipeline-gke-prod (Workspace)
-│   ├── excel-pipeline-data-prod (Workspace)
-│   └── excel-pipeline-cloud-run-prod (Workspace)
-├── excel-processing-pipeline-gke-shared (Project)
-│   └── excel-pipeline-registry-shared (Workspace)
-└── excel-processing-pipeline-gke-mgmt (Project)
-    ├── excel-pipeline-hcp-mgmt (Workspace)
-    └── excel-pipeline-governance-mgmt (Workspace)
-```
+The GCP Organization/Folder/Project hierarchy and the HCP Terraform
+Project/Workspace hierarchy are two separate concepts — an HCP Terraform
+"Project" is only an organizational grouping of workspaces, unrelated to a
+GCP Project. The dotted lines show which GCP project each HCP Terraform
+project's workspaces authenticate to via Workload Identity Federation, and
+with what granularity: `excel-pipeline-seed` trusts only the
+`governance-mgmt` workspace specifically (`hcp-mgmt` has no GCP access at
+all), while `dev`/`prod`/`shared` each trust every workspace in their
+respective HCP Terraform project, since those domain workspaces share one
+per-project deployer identity (see `terraform/platform/governance/wif.tf`).
 
 ---
 
