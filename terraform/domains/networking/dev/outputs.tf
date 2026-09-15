@@ -5,6 +5,11 @@ output "network_id" {
   value       = module.vpc.network_id
 }
 
+output "network_self_link" {
+  description = "Self-link of the VPC network."
+  value       = module.vpc.network_self_link
+}
+
 output "network_name" {
   description = "Name of the VPC network."
   value       = module.vpc.network_name
