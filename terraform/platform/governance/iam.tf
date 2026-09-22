@@ -19,3 +19,10 @@ resource "google_project_iam_member" "registry_admins" {
   role    = each.value
   member  = "group:${module.registry_admins_group.id}"
 }
+
+# Deliberately NOT here: keda-operators-{env}@'s roles/monitoring.viewer.
+# governance only grants roles for identities it creates itself
+# (sa-terraform-deployer, above) — keda-operator-sa is created by gke, and
+# no domain here represents Cloud Monitoring the way data represents
+# Firestore/Pub/Sub/GCS, so gke grants it directly, same as data already
+# does for gke-workloads-{env}@'s project-level roles (see the devlog).

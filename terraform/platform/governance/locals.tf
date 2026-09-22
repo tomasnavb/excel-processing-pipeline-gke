@@ -24,10 +24,11 @@ locals {
   # wraps exists once per project, and a shared group would otherwise leak
   # access across dev/prod through membership alone.
   workload_sa_names = {
-    gke-workloads = "worker-gke-sa"
-    app-runtime   = "api-runtime-sa"
-    infra-admins  = "sa-terraform-deployer"
-    api-invokers  = "excel-client-sa"
+    gke-workloads  = "worker-gke-sa"
+    app-runtime    = "api-runtime-sa"
+    infra-admins   = "sa-terraform-deployer"
+    api-invokers   = "excel-client-sa"
+    keda-operators = "keda-operator-sa"
   }
 
   per_env_groups = {
@@ -35,10 +36,10 @@ locals {
     "${pair[0]}-${pair[1]}" => {
       # Only infra-admins gets members here: sa-terraform-deployer is the
       # one SA governance itself creates (wif.tf). worker-gke-sa/
-      # api-runtime-sa/excel-client-sa don't exist yet — the domain that
-      # creates each one (gke, cloud-run) is responsible for adding it to
-      # its own group, the same way domains own their resource-scoped IAM
-      # bindings instead of governance.
+      # api-runtime-sa/excel-client-sa/keda-operator-sa don't exist yet —
+      # the domain that creates each one (gke, cloud-run) is responsible
+      # for adding it to its own group, the same way domains own their
+      # resource-scoped IAM bindings instead of governance.
       members = pair[0] == "infra-admins" ? [
         # A resource reference, not a hand-built string — a literal string
         # here creates no dependency, so Terraform could (and did, once)
@@ -140,7 +141,9 @@ locals {
   # as new domains land (container.googleapis.com for gke,
   # run.googleapis.com for cloud-run, pubsub.googleapis.com/
   # firestore.googleapis.com for data) — no new resource block needed.
-  project_apis = ["compute.googleapis.com"]
+  # monitoring.googleapis.com: needed by keda-operator-sa to read the
+  # Pub/Sub subscription's undelivered-message-count metric.
+  project_apis = ["compute.googleapis.com", "monitoring.googleapis.com"]
 
   project_api_bindings = {
     for pair in setproduct(["dev", "prod"], local.project_apis) :
