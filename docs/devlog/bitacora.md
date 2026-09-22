@@ -950,6 +950,298 @@ normal de token, sino una desconexión efectiva de la integración instalada.
 Terraform (Organization Settings → VCS Providers). Una vez reautorizada, el
 apply de `tfe_workspace.registry` funcionó sin cambiar nada del código.
 
+## 37. `self_link` vs `name` al referenciar la red desde `gke` — el motivo real es más acotado de lo esperado
+
+Al preparar el output `network_self_link` en `networking` (para que `gke`
+referencie la VPC), surgió la pregunta de por qué se suele preferir
+`self_link` sobre `name` al pasar una red entre recursos — una convención
+repetida con frecuencia pero sin verificar el motivo puntual.
+
+Verificado contra la doc oficial de `google_container_cluster`:
+
+> "network — The name or self_link of the Google Compute Engine network to
+> which the cluster is connected. **For Shared VPC, set this to the self
+> link of the shared network.**"
+
+El motivo documentado es específico de **Shared VPC** — cuando el recurso
+que referencia la red vive en un proyecto distinto del que aloja la red,
+`self_link` es la única forma no ambigua de apuntarla, porque incluye el
+proyecto en la URL; un nombre plano dependería del proyecto implícito de
+la llamada. Este proyecto no usa Shared VPC (cada entorno tiene su propia
+VPC en su propio proyecto), así que `name` y `self_link` son
+funcionalmente equivalentes acá — ninguno de los dos resuelve una
+ambigüedad real en este diseño puntual.
+
+**Decisión:** mantener `network_self_link` de todas formas, como
+convención defensiva de bajo costo — si en algún momento se introduce
+Shared VPC, el output ya está listo sin tener que volver a tocar
+`networking`. Pero vale la pena registrar que el motivo original ("se lee
+que se prefiere self_link") no aplica literal a este diseño; la razón real
+es más específica que la regla general que circula.
+
+## 38. Diseño de `terraform/domains/gke`: Autopilot vs. Standard, y módulo oficial vs. `google_container_cluster` a mano
+
+Dos decisiones de arquitectura evaluadas antes de escribir una línea de
+código del cluster, pidiendo una segunda opinión independiente además de
+la propia.
+
+**Autopilot vs. Standard:** la carga del worker es intermitente — procesa
+archivos Excel cuando llegan, después queda inactivo — no un servicio
+siempre activo. Autopilot cobra por pod mientras corre, no por nodos
+reservados; con Standard, lograr el mismo ahorro en reposo exige armar y
+mantener a mano un node pool con autoscaling a mínimo 0. Sobre el
+argumento de "perder práctica para la CKA": el temario de la CKA es sobre
+la API de Kubernetes en sí (Deployments, scheduling, networking, storage,
+troubleshooting), no sobre administración de node pools de GCP — Autopilot
+no saca nada de lo que la CKA pide, solo la parte específica de GCP.
+**Decisión:** Autopilot.
+
+**Módulo oficial (`terraform-google-modules/kubernetes-engine`) vs.
+`google_container_cluster` escrito a mano:** las dos decisiones se
+refuerzan entre sí. El motivo real para usar un módulo en un cluster
+Standard es que hay muchas piezas interdependientes (node pools,
+autoscaling del cluster, hardening de nodos) que un módulo evita tener que
+orquestar a mano — pero Autopilot ya colapsa casi toda esa complejidad en
+un solo resource con pocas decisiones reales (Workload Identity y Shielded
+Nodes ya vienen forzados por el propio modo Autopilot a nivel de API, no
+son algo que un módulo esté "regalando" por sobre lo que ya da
+`enable_autopilot = true`). Sumado a que GKE es el componente central que
+este proyecto existe para demostrar, y que `CLAUDE.md` ya separa todo lo
+de GKE como territorio de aprendizaje activo — escribirlo a mano es
+consistente con una regla que el proyecto ya se había dado, no una
+excepción arbitraria. **Decisión:** `google_container_cluster` a mano,
+usando el código fuente del módulo oficial como checklist de qué settings
+importan, sin depender de él.
+
+## 39. Autoscaling del worker: Deployment + KEDA, no HPA nativo ni Job + Eventarc
+
+El código del worker usa `subscriber.subscribe(...)` — streaming pull de
+larga duración, que nunca termina por sí solo. Se evaluaron 4 opciones
+antes de decidir:
+
+1. **Deployment simple, siempre ≥1 réplica activa.** El código encaja tal
+   cual, pero implica al menos 1 pod (y 1 nodo) corriendo siempre, sin
+   importar si hay trabajo — contradice el modelo de costo de Autopilot.
+2. **Deployment + HPA nativo.** Limitación real confirmada: HPA no puede
+   bajar de `minReplicas: 1` — obtiene sus métricas (CPU/memoria)
+   scrapeando el propio pod, así que sin pods no tiene de dónde leer nada,
+   y no puede decidir si pasar de 0 a 1. No resuelve el costo en reposo.
+3. **Deployment + KEDA**, scaler `gcp-pubsub`, `minReplicaCount: 0`. A
+   diferencia de HPA, KEDA lee la métrica (`num_undelivered_messages`)
+   directo de Cloud Monitoring — una fuente que existe independientemente
+   de si el consumidor corre o no. Por eso puede "despertar" algo que no
+   existe. No requiere reescribir el worker.
+4. **Reescribir el worker como Kubernetes Job, disparado por Eventarc.**
+   Encontrado un problema no evidente a primera vista: Eventarc entrega
+   eventos vía HTTP POST a un endpoint activo, así que igual hace falta un
+   Service/Deployment receptor corriendo **siempre** — esta opción no
+   elimina el costo en reposo, solo lo traslada a un componente más chico.
+   Además exige reescribir el worker de "escuchar para siempre" a
+   "procesar un mensaje y terminar".
+
+**Alternativa no considerada originalmente, encontrada al pedir una
+segunda opinión:** KEDA tiene un segundo CRD, `ScaledJob` (no solo
+`ScaledObject`), que crea un Job de Kubernetes por unidad de trabajo sin
+necesitar ningún receptor de Eventarc — el propio controller de KEDA
+sondea la métrica y crea los Jobs directo. Da el mismo aislamiento por
+mensaje que la opción 4, sin su componente permanente. El costo es el
+mismo que la opción 4: reescribir el worker. Sin un motivo concreto para
+necesitar ese aislamiento (no hay fugas de memoria ni estado compartido
+esperables entre archivos), no se justifica el costo de reescritura.
+
+**Decisión:** opción 3, `ScaledObject` sobre el Deployment existente, sin
+tocar el código del worker.
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker-gke-scaledobject
+spec:
+  scaleTargetRef:
+    name: worker-gke-deployment
+  minReplicaCount: 0
+  maxReplicaCount: 10
+  pollingInterval: 30
+  cooldownPeriod: 300
+  triggers:
+    - type: gcp-pubsub
+      metadata:
+        subscriptionName: excel-pipeline-jobs-sub-dev
+        mode: SubscriptionSize
+        value: "5"
+        activationValue: "0"
+      authenticationRef:
+        name: keda-trigger-auth-gcp
+```
+
+`mode: SubscriptionSize` (profundidad de cola) en vez de
+`OldestUnackedMessageAge` (edad del mensaje más viejo): para ráfagas de
+archivos que llegan juntos (ej. un publisher mandando el export de varios
+clientes de una), la profundidad de cola es más intuitiva de razonar.
+`activationValue` (el salto de 0→1) queda separado de `value` (el umbral
+de escalado entre 1 y N) — son dos umbrales distintos, no el mismo número
+repetido.
+
+**Honestidad completa sobre la elección de GKE en sí para este workload:**
+en un sistema real sin el objetivo de portfolio, Cloud Run sería la
+respuesta correcta para esta carga — más simple, más barato, escala a
+cero nativo sin KEDA. La razón para usar GKE igual no es técnica, es
+que el objetivo del proyecto es demostrar dominio de Kubernetes para
+roles de infraestructura y la certificación CKA — juzgado contra esa meta
+real, GKE es la elección que corresponde, no una sobre-ingeniería sin
+justificación. El diseño (Autopilot + KEDA scale-to-zero) además está
+armado para que el costo en reposo termine siendo casi el mismo que el de
+Cloud Run — la diferencia no es de costo operativo, es de esfuerzo de
+ingeniería invertido a propósito para aprender.
+
+## 40. Acceso al control plane de GKE: DNS-based endpoint, no bastion ni master authorized networks
+
+Con el cluster privado, surgió la pregunta de cómo administrarlo sin
+exponer el control plane públicamente. La IP pública propia cambia
+seguido — mantener un `master_authorized_networks` a mano es engorroso — y
+un bastion host (con IAP) es la solución clásica, pero agrega una VM y
+firewall rules que mantener.
+
+Investigada una alternativa más nueva: el **DNS-based endpoint** del
+control plane de GKE. En vez de depender de la IP de origen, expone un
+endpoint DNS alcanzable desde cualquier red que llegue a las APIs de
+Google, protegido puramente por IAM (`container.clusters.connect`), no por
+red:
+
+> "Access to your control plane over the DNS-based endpoint is protected
+> via the same IAM policies used to protect all GCP API access. [...]
+> Using the DNS-based endpoint eliminates the need for a bastion host or
+> proxy nodes."
+
+**Decisión:** DNS-based endpoint, con el endpoint IP apagado por
+completo — sin bastion, sin lista de IPs que mantener, sin superficie de
+red expuesta. Encaja con el patrón que ya sigue todo el proyecto de
+preferir control por IAM sobre control por red (mismo espíritu que WIF en
+vez de keys estáticas).
+
+```hcl
+private_cluster_config {
+  enable_private_nodes    = true
+  enable_private_endpoint = true
+  master_ipv4_cidr_block  = "172.16.0.0/28"
+}
+
+control_plane_endpoints_config {
+  dns_endpoint_config {
+    allow_external_traffic = true
+  }
+  ip_endpoints_config {
+    enabled = false
+  }
+}
+```
+
+`enable_private_nodes` sigue haciendo falta (los nodos igual no llevan IP
+pública, es una configuración separada de cómo se administra el control
+plane) y `master_ipv4_cidr_block` lo sigue pidiendo la API aunque el
+endpoint IP nunca se use — GCP lo usa para el peering interno del master
+hacia la VPC, es una exigencia estructural de `enable_private_nodes`, no
+algo ligado a si ese endpoint queda expuesto.
+
+## 41. Identidad de KEDA: grupo propio, no reusar `worker-gke-sa`
+
+Para que el scaler `gcp-pubsub` de KEDA pueda leer la métrica de mensajes
+no entregados, necesita autenticarse contra Cloud Monitoring vía Workload
+Identity. Verificado contra la doc oficial de KEDA: la identidad que
+efectivamente hace esa consulta es la del **propio operator de KEDA**
+(la ServiceAccount `keda-operator` en el namespace `keda`), no la del
+worker — tiene sentido, porque cuando el Deployment está en 0 réplicas no
+hay ningún pod del worker corriendo para prestar su identidad.
+
+Quedaba la duda de si reusar la misma Google Service Account que ya usa
+`worker-gke-sa` (técnicamente posible: dos Kubernetes ServiceAccounts
+distintas pueden apuntar, cada una vía su propio binding, a la misma GSA
+de fondo) o crear una nueva. El worker nunca toca Cloud Monitoring en su
+propio código — agregarle ese permiso solo para KEDA amplía su radio de
+acceso más allá de lo que el proceso realmente hace, contra el criterio de
+mínimo privilegio que ya rige todo el proyecto.
+
+También se consideró saltear el patrón de grupos de Cloud Identity para
+esta identidad puntual y bindear el rol directo a la SA — descartado: el
+propio `CLAUDE.md` establece desde el arranque del proyecto que el
+objetivo es demostrar el patrón de RBAC correcto vía grupos, no bindings
+sueltos. Hacer la excepción acá, sin ningún motivo de peso detrás (a
+diferencia de otras excepciones ya tomadas en el proyecto, como el
+`google_container_cluster` a mano), sería el contraejemplo perfecto contra
+algo que el proyecto existe para demostrar.
+
+**Decisión:** `keda-operator-sa` como identidad separada de
+`worker-gke-sa`, con su propio grupo `keda-operators-{env}@`. Se agregó
+también `monitoring.googleapis.com` a `local.project_apis` en `apis.tf` —
+mismo mecanismo ya usado para `compute.googleapis.com`, y sigue viviendo
+en `governance` sin cambios (habilitar una API es una decisión distinta de
+otorgar un rol IAM — ver más abajo).
+
+**Error real en el primer intento, corregido en la sección 41-bis:** los
+roles se dividieron mal la primera vez. Se otorgó `roles/monitoring.viewer`
+desde `governance`, con el razonamiento "es project-level, como
+`infra-admins-{env}@`" — aplicando la regla escrita literal
+("project-level → `governance`") sin cruzarla contra un precedente que ya
+existía en la propia tabla de `docs/governance/iam.md`: `datastore.user`
+de `gke-workloads-{env}@` también es project-level (Firestore no tiene
+alcance más fino), y sin embargo lo otorga `data`, no `governance`. Se
+detectó al pedir que se explicara por qué `governance` otorgaba ese rol en
+particular.
+
+## 41-bis. Corrección: `governance` solo otorga roles de identidades que ella misma crea
+
+El criterio real, ya presente de forma implícita en el diseño pero nunca
+declarado así hasta este punto: `governance` **no** otorga todo lo que sea
+project-level — otorga roles únicamente para identidades que **ella misma
+crea** (`sa-terraform-deployer`, tanto en `infra-admins-{env}@` como en
+`registry-admins@` — self-contained, sin depender de otro domain). Para
+cualquier rol de una identidad que crea **otro** domain, el criterio pasa
+a ser "¿qué domain representa ese servicio de GCP en la estructura del
+proyecto?", sin importar si el rol en sí es project-level o de recurso —
+por eso `data` otorga `datastore.user` a `gke-workloads-{env}@` aunque no
+sea quien crea `worker-gke-sa`.
+
+Aplicado a KEDA: `keda-operator-sa` la crea `gke`, no `governance`. No
+existe un domain "de monitoring" en la estructura del proyecto
+(`networking`/`gke`/`data`/`cloud-run`/`registry`) y `gke` es el único
+consumidor real de ese permiso (vía KEDA) — así que, siguiendo el mismo
+criterio que ya regía para `datastore.user`, `roles/monitoring.viewer`
+pasa a otorgarlo `gke`, no `governance`. Se sacó el
+`google_project_iam_member.keda_operators` de `governance/iam.tf` (y los
+locals que ya no se usaban), dejando un comentario explicando por qué
+*no* está ahí — para que nadie lo vuelva a agregar por el mismo motivo
+equivocado. `roles/pubsub.viewer` de `keda-operators-{env}@` no se vio
+afectado por esta corrección: siempre estuvo bien asignado a
+`terraform/domains/data`, mismo criterio que `pubsub.subscriber` de
+`gke-workloads-{env}@`.
+
+`docs/governance/iam.md` quedó actualizado con este criterio explícito en
+la sección "Why the split between governance and each domain", en vez de
+la regla project-level/resource-level que tenía antes y que resultó
+incompleta.
+
+## 42. ¿El nombre "jobs" en los recursos confunde con el Job de Kubernetes descartado?
+
+Con la decisión de la sección 39 (Deployment + KEDA, no Job de
+Kubernetes), surgió la duda de si el bucket, el topic y la subscription
+—todos con "jobs" en el nombre— quedaban mal nombrados o potencialmente
+confusos.
+
+**Resuelto que no:** "jobs" en estos nombres nunca estuvo atado al objeto
+`Job` de Kubernetes — está atado al concepto de negocio (`job_id` como
+clave de cada archivo procesado en Firestore), terminología de sistemas
+distribuidos anterior a Kubernetes y más genérica (cola de jobs, batch
+job — el mismo sentido que usan Celery, Sidekiq, GitLab CI). Cada nombre
+además ya lleva su propio tipo de recurso explícito en el sufijo
+(`-topic`, `-sub`, bucket) — nadie concluye que `excel-pipeline-jobs-topic-{env}`
+*es* un recurso `Job` de K8s, porque el sufijo ya resuelve esa pregunta.
+**Decisión:** mantener los nombres tal cual están. El único riesgo real no
+es de naming sino de redacción — evitar usar "job" de forma ambigua en
+prosa cerca de la discusión de Kubernetes Job vs. Deployment (como en la
+sección 39), aclarando en esos casos puntuales a cuál de las dos cosas se
+refiere.
+
 ---
 
 ## Lecciones aprendidas
