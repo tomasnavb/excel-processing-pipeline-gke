@@ -16,7 +16,8 @@ An asynchronous Excel file processing pipeline on Google Cloud:
   (`OBJECT_FINALIZE`) — the API never publishes the event itself, to avoid a
   dual-write.
 - A **worker on GKE** consumes the event, processes the file, writes the
-  result back to GCS, and updates the job status.
+  result back to GCS, and updates the job status — scaling event-driven via
+  **KEDA**, down to 0 replicas at rest, instead of an always-on pod.
 - Dev and prod are fully separate GCP projects (isolated IAM, quotas, and
   billing), each under its own Folder in a Cloud Identity organization.
 - Infrastructure is managed with **HCP Terraform**, authenticating to GCP
@@ -95,19 +96,34 @@ per-project deployer identity (see `terraform/platform/governance/wif.tf`).
       workspaces to use.
 - [x] IAM groups/roles reference table and diagramming style guide.
 - [x] Architecture diagram.
+- [x] `terraform/domains/networking`: VPC, GKE node subnet, and pod/service
+      secondary IP ranges for dev/prod, via
+      `terraform-google-modules/network`.
+
+### In progress (as of 2026-09-22)
+
+- [ ] `terraform/domains/gke`: a hand-written `google_container_cluster` in
+      Autopilot mode (not the official module — deliberate, see the
+      devlog), reached only via a DNS-based control plane endpoint (no
+      bastion, no `master_authorized_networks` to maintain). The worker
+      scales event-driven, via KEDA (`Deployment` + `ScaledObject`,
+      0 replicas at rest, scaling in response to Pub/Sub backlog) instead
+      of an always-on replica. `governance` side (the `keda-operators-{env}@`
+      group and its IAM split) is designed but not yet pushed.
 
 ### Next steps
 
-- [ ] `terraform/domains/networking`: VPC and subnets for dev/prod.
 - [ ] `terraform/domains/registry/shared`: the Artifact Registry repo, the
       Cloud Build ↔ GitHub connection (2nd-gen), and build triggers.
 - [ ] Resource-scoped IAM bindings (`gke-workloads`, `app-runtime`,
       `api-invokers`, `ci-cd-pipelines` roles), attached by each domain as
       it creates its own resources.
-- [ ] `terraform/domains/{gke,data,cloud-run}` implementation (currently
+- [ ] `terraform/domains/{data,cloud-run}` implementation (currently
       scaffolded, not yet implemented).
-- [ ] The FastAPI API and the GKE worker.
-- [ ] Kustomize manifests.
+- [ ] The FastAPI API and the GKE worker's own application code.
+- [ ] Kustomize manifests for the worker's `Deployment`/`ScaledObject` —
+      KEDA itself is installed via Terraform (`helm_release`, in
+      `terraform/domains/gke`), not Kustomize.
 
 A detailed, chronological log of decisions and problems solved along the way
 lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).
@@ -123,4 +139,5 @@ lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
 Google Cloud (Cloud Run, GKE Autopilot, Firestore, GCS, Pub/Sub, Cloud
-Identity/IAM) · Terraform + HCP Terraform · FastAPI · Docker · Kustomize
+Monitoring, Cloud Identity/IAM) · Terraform + HCP Terraform · KEDA · Helm ·
+FastAPI · Docker · Kustomize
