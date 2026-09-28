@@ -116,8 +116,21 @@ already in this table. See the devlog for the full correction.
 ## Known gap, tracked for later
 
 Image pulls on GKE nodes and Cloud Run don't use the workload identities
-above (`gke-workloads-{env}@`, `app-runtime-{env}@`) — they use the GKE node
-service account and the Cloud Run service agent respectively, which need
-their own `roles/artifactregistry.reader` grant on `excel-pipeline-images`.
-This is GKE/Cloud Run-specific configuration to work out when those domains
-are implemented, not a gap in this table.
+above (`gke-workloads-{env}@`, `app-runtime-{env}@`) at all — image pulls
+happen at the node/kubelet level, before any pod's own Workload Identity
+context exists. For GKE Autopilot specifically, that identity is fixed and
+can't be overridden: the project's Compute Engine default service account
+(`{PROJECT_NUMBER}-compute@developer.gserviceaccount.com`). Cloud Run pulls
+via its own service agent, similarly unrelated to `app-runtime-{env}@`.
+
+Both need `roles/artifactregistry.reader` on `excel-pipeline-images` — a
+repo that lives in the `shared` project, not `dev`/`prod`. Following the
+same rule as the rest of this table (whoever owns the target resource
+grants access to it, regardless of which domain creates the consuming
+identity), this binding belongs to `terraform/domains/registry/shared`,
+not `gke`/`cloud-run`. The main open question for when that domain gets
+built: reaching dev/prod's Compute Engine default SA email requires their
+project *number* (not ID) from within `registry/shared`'s own Terraform —
+a cross-project value that governance already knows, so it's a candidate
+for the same variable-set channel already used for `project_id` (see the
+devlog), rather than `tfe_outputs`.
