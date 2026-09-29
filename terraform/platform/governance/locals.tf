@@ -153,6 +153,7 @@ locals {
     "compute.googleapis.com",
     "monitoring.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudidentity.googleapis.com",
     "container.googleapis.com",
   ]
 
