@@ -58,18 +58,58 @@ Diagrams follow the conventions in [`docs/architecture/style-guide.md`](docs/arc
 ![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?logo=googlecloud&logoColor=white)
 ![HCP Terraform](https://img.shields.io/badge/HCP_Terraform-7B42BC?logo=terraform&logoColor=white)
 
-![Platform foundation diagram](docs/architecture/platform-foundation.png)
+Kept as Markdown rather than a diagram image on purpose — this tree
+changes every time a domain or workspace is added (most recently
+`gke-addons`), and a static image goes stale faster than it's worth
+re-exporting each time.
 
-The GCP Organization/Folder/Project hierarchy and the HCP Terraform
-Project/Workspace hierarchy are two separate concepts — an HCP Terraform
-"Project" is only an organizational grouping of workspaces, unrelated to a
-GCP Project. The dotted lines show which GCP project each HCP Terraform
-project's workspaces authenticate to via Workload Identity Federation, and
-with what granularity: `excel-pipeline-seed` trusts only the
-`governance-mgmt` workspace specifically (`hcp-mgmt` has no GCP access at
-all), while `dev`/`prod`/`shared` each trust every workspace in their
-respective HCP Terraform project, since those domain workspaces share one
-per-project deployer identity (see `terraform/platform/governance/wif.tf`).
+#### GCP resource hierarchy
+
+```
+tomasnavarro.dev (Organization)
+├── development (Folder)
+│   └── excel-pipeline-dev (Project)
+├── production (Folder)
+│   └── excel-pipeline-prod (Project)
+├── bootstrap (Folder)
+│   └── excel-pipeline-seed (Project)
+└── shared (Folder)
+    └── excel-pipeline-shared (Project)
+```
+
+#### HCP Terraform resource hierarchy
+
+A separate hierarchy from the one above — an HCP Terraform "Project" is an
+organizational concept for grouping workspaces, unrelated to a GCP Project.
+
+```
+<hcp-terraform-org> (Organization)
+├── excel-processing-pipeline-gke-dev (Project)
+│   ├── excel-pipeline-networking-dev (Workspace)
+│   ├── excel-pipeline-gke-dev (Workspace)
+│   ├── excel-pipeline-gke-addons-dev (Workspace)
+│   ├── excel-pipeline-data-dev (Workspace)
+│   └── excel-pipeline-cloud-run-dev (Workspace)
+├── excel-processing-pipeline-gke-prod (Project)
+│   ├── excel-pipeline-networking-prod (Workspace)
+│   ├── excel-pipeline-gke-prod (Workspace)
+│   ├── excel-pipeline-gke-addons-prod (Workspace)
+│   ├── excel-pipeline-data-prod (Workspace)
+│   └── excel-pipeline-cloud-run-prod (Workspace)
+├── excel-processing-pipeline-gke-shared (Project)
+│   └── excel-pipeline-registry-shared (Workspace)
+└── excel-processing-pipeline-gke-mgmt (Project)
+    ├── excel-pipeline-hcp-mgmt (Workspace)
+    └── excel-pipeline-governance-mgmt (Workspace)
+```
+
+Each GCP project's Workload Identity Federation trust is scoped to
+exactly the HCP Terraform workspaces that need it: `excel-pipeline-seed`
+trusts only the `governance-mgmt` workspace specifically (`hcp-mgmt` has
+no GCP access at all), while `dev`/`prod`/`shared` each trust every
+workspace inside their respective HCP Terraform project, since those
+domain workspaces share one per-project deployer identity (see
+`terraform/platform/governance/wif.tf`).
 
 ---
 
@@ -88,28 +128,41 @@ per-project deployer identity (see `terraform/platform/governance/wif.tf`).
       `bootstrap` folder and seed project created, with their own Workload
       Identity Pool/Provider and service account for governance's auth.
 - [x] `terraform/platform/governance/`: creates the `development`/
-      `production`/`shared` folders and their GCP projects, the 10 Cloud
+      `production`/`shared` folders and their GCP projects, the 12 Cloud
       Identity groups (split by environment where needed, plus
-      `registry-admins@`), project-level IAM for `infra-admins` and
-      `registry-admins`, and a per-project Workload Identity
-      Pool/Provider/service account — including `shared` — for the domain
-      workspaces to use.
+      `registry-admins@`/`ci-cd-pipelines@`), project-level IAM for
+      `infra-admins`/`registry-admins`/`keda-operators`, and a per-project
+      Workload Identity Pool/Provider/service account — including
+      `shared` — for the domain workspaces to use.
 - [x] IAM groups/roles reference table and diagramming style guide.
 - [x] Architecture diagram.
 - [x] `terraform/domains/networking`: VPC, GKE node subnet, and pod/service
       secondary IP ranges for dev/prod, via
       `terraform-google-modules/network`.
+- [x] `terraform/domains/gke` (dev): a hand-written `google_container_cluster`
+      in Autopilot mode, factored into the reusable
+      `terraform/modules/gke-autopilot` module (not the official one —
+      deliberate, see the devlog), reached only via a DNS-based control
+      plane endpoint (no bastion, no `master_authorized_networks`).
+      `worker-gke-sa`/`keda-operator-sa`, their group memberships, and
+      their Workload Identity bindings applied successfully on a real
+      apply.
+- [x] `terraform/domains/gke-addons` (dev workspace created; `data
+      "google_container_cluster"` looks the cluster up by name, not
+      `tfe_outputs`): installs KEDA via Helm, in its own workspace — the
+      `kubernetes`/`helm` providers can't safely be configured from a
+      resource created in the same apply (see the devlog).
+- [x] CI: GitHub Actions running `terraform fmt`/`validate`/`tflint` on
+      every push touching `terraform/`, no GCP/HCP credentials involved.
 
-### In progress (as of 2026-09-22)
+### In progress (as of 2026-09-30)
 
-- [ ] `terraform/domains/gke`: a hand-written `google_container_cluster` in
-      Autopilot mode (not the official module — deliberate, see the
-      devlog), reached only via a DNS-based control plane endpoint (no
-      bastion, no `master_authorized_networks` to maintain). The worker
-      scales event-driven, via KEDA (`Deployment` + `ScaledObject`,
-      0 replicas at rest, scaling in response to Pub/Sub backlog) instead
-      of an always-on replica. `governance` side (the `keda-operators-{env}@`
-      group and its IAM split) is designed but not yet pushed.
+- [ ] `gke-addons`: KEDA's Helm install and its Workload Identity
+      annotation haven't been confirmed on a clean end-to-end apply yet.
+      The `ScaledObject`/`TriggerAuthentication` and the worker's own KSA
+      are Kustomize's, not written yet.
+- [ ] Mirroring `gke`/`gke-addons`/`networking` into `prod` (`dev` only so
+      far).
 
 ### Next steps
 
@@ -121,9 +174,7 @@ per-project deployer identity (see `terraform/platform/governance/wif.tf`).
 - [ ] `terraform/domains/{data,cloud-run}` implementation (currently
       scaffolded, not yet implemented).
 - [ ] The FastAPI API and the GKE worker's own application code.
-- [ ] Kustomize manifests for the worker's `Deployment`/`ScaledObject` —
-      KEDA itself is installed via Terraform (`helm_release`, in
-      `terraform/domains/gke`), not Kustomize.
+- [ ] Kustomize manifests for the worker's `Deployment`/`ScaledObject`/KSA.
 
 A detailed, chronological log of decisions and problems solved along the way
 lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).

@@ -1299,6 +1299,192 @@ algo que no se había anticipado como prerequisito al diseñar el patrón de
 "cada domain agrega sus propias SAs a los grupos que `governance` ya
 creó" (secciones 17, 32).
 
+## 44. Modularizar el cluster: `terraform/modules/gke-autopilot`
+
+Con `gke/dev/cluster.tf` funcionando, se extrajo el `google_container_cluster`
+a un módulo propio (`terraform/modules/gke-autopilot`) para reusarlo entre
+`dev`/`prod` sin duplicar el resource completo — mismo criterio que ya se
+usa para `networking` con el módulo oficial, pero acá con un módulo escrito
+a mano (ver sección 38: la decisión de no usar el módulo oficial de GKE
+sigue en pie, esto es solo evitar la duplicación entre entornos).
+
+**Diseño del módulo:** todo lo que puede variar por entorno queda como
+variable (`project_id`, `region`, `name`, los self_links de red,
+`master_ipv4_cidr_block`, `release_channel`). Los 5 valores que definen la
+postura de seguridad del cluster (`enable_autopilot`, `enable_private_nodes`,
+`enable_private_endpoint`, `ip_endpoints_config.enabled`,
+`allow_external_traffic`) quedan como `locals` fijos **dentro** del módulo,
+no como variables — decisión deliberada: ningún caller del módulo debería
+poder aflojar esas decisiones de seguridad por entorno. `release_channel`
+sí queda como variable, a diferencia de esos 5, porque tiene sentido que
+`dev` y `prod` corran canales distintos (detectar problemas de upgrade en
+`dev` antes de que lleguen a `prod`).
+
+**Un detalle de diseño de módulos, no específico de este proyecto:** el
+`data "tfe_outputs" "networking"` se resuelve en el root module
+(`gke/dev/cluster.tf`), no dentro del módulo — un módulo reusable no
+debería saber de dónde vienen sus inputs (`tfe_outputs`, un valor
+hardcodeado, otro mecanismo), solo recibirlos ya resueltos como variables
+genéricas. Meter el `data` adentro del módulo hubiera obligado a
+parametrizar hasta el nombre de la workspace de HCP Terraform como
+variable del módulo, para poder reusarlo en `prod`.
+
+## 45. `kubernetes`/`helm` no pueden vivir en el mismo módulo que el cluster que los alimenta — split a `gke-addons`
+
+Con KEDA instalado vía Helm dentro del mismo `gke/dev` que crea el cluster,
+surgió la duda de si esto era seguro a largo plazo. Se pidió una segunda
+opinión externa (un análisis de diseño pegado en el chat) y se verificó
+contra la documentación oficial del provider `hashicorp/kubernetes` — el
+diagnóstico resultó certero, casi textual respecto al warning real:
+
+> "resources that provide the credentials [...] should not be created in
+> the same Terraform module where Kubernetes provider resources are also
+> used, as this will lead to intermittent and unpredictable errors [...]
+> The most reliable way to configure the Kubernetes provider is to ensure
+> that the cluster itself and the Kubernetes provider resources can be
+> managed with separate apply operations, with data-sources used to
+> convey values between the two stages."
+
+El motivo de fondo: los bloques `provider` se resuelven **antes** que el
+grafo de resources, así que si sus argumentos (`host`, `cluster_ca_certificate`)
+dependen de atributos de un resource que el propio plan todavía no puede
+resolver (primer apply, o un reemplazo del cluster), el plan falla o queda
+en un estado inconsistente. Investigado también si las versiones actuales
+de los providers (`kubernetes ~> 3.2`, `helm ~> 3.3`) o los *ephemeral
+resources* de Terraform 1.10+ mitigan esto — no, los ephemeral resources
+todavía no cubren la configuración del provider en sí para este provider,
+solo lecturas puntuales tipo `kubernetes_secret`.
+
+**Decisión:** separar en dos workspaces —
+`terraform/domains/gke` (cluster + GSAs + IAM) y
+`terraform/domains/gke-addons` (namespace + `helm_release` de KEDA + la
+anotación de Workload Identity de su KSA), con su propio workspace HCP
+Terraform (`excel-pipeline-gke-addons-{dev,prod}`, agregado a
+`local.domains` en `hcp`, mismo mecanismo genérico de siempre).
+
+**Cómo `gke-addons` referencia el cluster, sin `tfe_outputs`:** el nombre
+del cluster es predecible por convención (`excel-pipeline-gke-dev`) — no
+un valor que GCP calcule, como sí lo es el `self_link` de la VPC (donde
+`tfe_outputs` sigue siendo la herramienta correcta). Entonces
+`gke-addons` usa `data "google_container_cluster"` por nombre, evitando
+meter el provider `tfe` (y por lo tanto `TFE_TOKEN`) en una workspace más
+solo para esto.
+
+Al mover el código, `kubernetes_annotations.gsa_binding` (la anotación de
+la KSA `keda-operator`) tuvo que dejar de referenciar
+`google_service_account.this["keda"].email` (un resource que ahora vive
+en el *state* de `gke`, no accesible desde `gke-addons`) — se reemplazó
+por el mismo tipo de string predecible que ya se usa en todo el proyecto:
+`"keda-operator-sa@${var.project_id}.iam.gserviceaccount.com"`.
+
+## 46. CI de GitHub Actions: `fmt` + `validate` + `tflint`
+
+Se agregó `.github/workflows/terraform-ci.yml` con tres jobs, deliberadamente
+**sin ninguna credencial de GCP/HCP** — son chequeos estáticos, y un
+`plan` real ya corre en HCP Terraform en cada push vía el trigger VCS de
+cada workspace; duplicarlo en GitHub Actions significaría distribuir
+credenciales de GCP ahí, contra la arquitectura de "sin keys estáticas"
+de todo el proyecto.
+
+- `fmt`: `terraform fmt -check -recursive -diff terraform/`.
+- `validate`: itera dinámicamente sobre **cualquier** directorio con un
+  `.tf` dentro (`find terraform -name '*.tf' -exec dirname {} \; | sort -u`),
+  root modules y `terraform/modules/*` por igual — sin lista hardcodeada
+  que mantener al día a medida que se agregan domains/entornos.
+- `tflint`, con `tflint-ruleset-google` — agrega chequeos específicos de
+  GCP que `validate` no cubre (argumentos deprecados, tipos incorrectos).
+
+**Un par de detalles no obvios, encontrados al armarlo:**
+- `fmt`/`tflint` corrían inicialmente sobre el repo completo, no acotados
+  a `terraform/` — inofensivo hoy (no hay `.tf` en ningún otro lado), pero
+  inconsistente con `validate`, que sí estaba bien acotado desde el
+  principio. Corregido para que los tres respeten el mismo límite.
+- `tflint --recursive` resuelve un `--config` relativo contra **cada
+  subdirectorio que escanea**, no contra el directorio original — hace
+  falta un `cd terraform` real (no `--chdir`, que no se puede combinar con
+  `--recursive`) más `--config` apuntando al `.tflint.hcl` de la raíz por
+  path absoluto (`$GITHUB_WORKSPACE`).
+- Correr `fmt` localmente antes del primer push encontró dos archivos
+  reales mal alineados (`cluster.tf`, de esta misma sesión, y
+  `governance/wif.tf`, viejo, sin relación) — confirma que vale la pena
+  correr el check localmente al menos una vez antes de confiar en que el
+  primer run de CI va a salir verde.
+
+De paso, se pusieron a prueba las reglas de bloqueo de `main`: activar
+"Require a pull request before merging" + "Require status checks to pass
+before merging" en GitHub bloquearía el push directo que se usó durante
+toda esta bitácora — cambio de flujo real, no solo técnico, que se decidió
+dejar pendiente por ahora.
+
+## 47. Limpieza del scaffolding vacío
+
+`cloud-run/{dev,prod}`, `data/{dev,prod}` y `registry/shared` seguían con
+los 4 archivos vacíos (0 bytes) del scaffolding inicial (sección 2) — sin
+ningún costo real, se borraron. `gke/prod` sí tenía contenido real
+(`providers.tf`, `terraform.tf`, `variables.tf`, el boilerplate de dynamic
+credentials) pero también se borró: predataba el módulo `gke-autopilot` y
+el split hacia `gke-addons`, así que iba a haber que reescribirlo entero
+de todas formas. De paso, esto resolvió fallos de `tflint` sobre
+`terraform.tf` sin `required_version` — un artefacto del scaffolding
+original, no un problema de configuración real.
+
+## 48. Primer apply real de `gke-dev`: los permisos que faltaban, y un bug de Workload Identity
+
+Con el módulo y el split de `gke-addons` ya escritos, el primer apply real
+de `gke-dev` expuso, en dos rondas, cuatro problemas que ningún `plan`
+anterior había detectado.
+
+**Ronda 1 — tres permisos de IAM que `infra-admins-{env}@` nunca había
+necesitado:**
+
+1. `Permission 'iam.serviceAccounts.create' denied` — creando
+   `worker-gke-sa`/`keda-operator-sa`. Ninguno de los 6 roles de
+   `infra_admin_roles` tocaba IAM de Service Accounts — nunca hizo falta
+   antes porque `governance` era la única que creaba SAs (`wif.tf`, con
+   los permisos de `governance-admin-sa`). `gke` es el primer domain que
+   crea las suyas propias. **Fix:** `roles/iam.serviceAccountAdmin`.
+2. `Error retrieving IAM policy for project` — otorgando `monitoring.viewer`
+   a `keda-operators-dev@`. Otorgar un rol a alguien no es "crear un
+   recurso" — es leer y reescribir la *policy completa* del proyecto
+   (`getIamPolicy`/`setIamPolicy`), un permiso distinto y más amplio que
+   cualquiera de los roles específicos por recurso ya otorgados
+   (`container.admin` te deja crear clusters, no decidir quién tiene
+   acceso al proyecto). Es genérico: cualquier domain que otorgue roles a
+   sus propios grupos (el patrón ya establecido en la sección 43-anterior)
+   lo va a necesitar. **Fix:** `roles/resourcemanager.projectIamAdmin`.
+3. `The user does not have access to service account
+   "...-compute@developer.gserviceaccount.com"` — creando el cluster en
+   sí. Crear un cluster que use la Compute Engine default SA para sus
+   nodos (el comportamiento por default) requiere `iam.serviceAccountUser`
+   **sobre esa SA puntual** — un binding a nivel recurso, no un rol de
+   proyecto genérico, y sobre una identidad que ningún domain crea (la
+   provisiona GCP). **Fix:** un `google_service_account_iam_member` nuevo
+   en `governance`, no en `gke` — `governance` ya tiene el project number
+   y el grupo como referencias directas, sin necesitar ningún `data`
+   adicional.
+
+**Ronda 2, con la anterior resuelta — `Identity Pool does not exist
+(excel-pipeline-dev.svc.id.goog)`** al crear el binding de
+`workloadIdentityUser`. Dos bugs combinados:
+
+- El módulo `gke-autopilot` nunca declaraba `workload_identity_config`.
+  Autopilot fuerza la *política* de Workload Identity (no se puede
+  desactivar), pero empíricamente eso solo no alcanza para que el pool en
+  sí (`{project}.svc.id.goog`) quede aprovisionado — hace falta el bloque
+  explícito, con el `workload_pool` fijo por convención de GCP (scopeado
+  al proyecto, no al cluster individual, por eso no lleva el nombre del
+  cluster).
+- El binding (`google_service_account_iam_member.ksa_binding`) referencia
+  ese pool solo por su nombre predecible — ninguna referencia real al
+  módulo del cluster — así que nada le indicaba a Terraform que había que
+  esperar a que el cluster termine de crearse. Corrió en paralelo y perdió
+  la carrera contra un pool que, además, ni siquiera se iba a crear sin el
+  fix anterior. **Fix:** el bloque `workload_identity_config` en el
+  módulo, más `depends_on = [module.gke_autopilot]` en el binding.
+
+Con los cuatro resueltos, la creación de las SAs, el membership a los
+grupos, el `monitoring.viewer`, y el cluster en sí aplicaron correctamente.
+
 ---
 
 ## Lecciones aprendidas
@@ -1403,3 +1589,19 @@ creó" (secciones 17, 32).
   de HCP Terraform era nuevo). Una hipótesis que "suena plausible" por
   parecerse a un caso previo puede llevar a descartar la investigación real
   demasiado pronto.
+- **Crear un recurso y editar quién tiene acceso al proyecto son permisos
+  distintos, aunque los dos "usen IAM".** La ronda 1 de la sección 48 es el
+  ejemplo más claro: `infra-admins-{env}@` podía crear clusters, VPCs y
+  buckets desde el día uno, pero no pudo crear una Service Account propia
+  ni otorgarle un rol a uno de sus grupos hasta que se agregaron
+  `serviceAccountAdmin`/`projectIamAdmin` — dos permisos que ningún domain
+  había necesitado porque, hasta `gke`, `governance` era la única que
+  hacía ambas cosas. Un conjunto de roles que funcionó bien para varios
+  domains seguidos no garantiza que cubra lo que necesita el próximo.
+- **Un string predecible sigue sin generar dependencia, incluso cuando el
+  string en sí es correcto.** La sección 48 lo muestra en una variante
+  nueva del error ya conocido (sección 33): no era que
+  `excel-pipeline-dev.svc.id.goog` estuviera mal escrito — era que nada en
+  el código le decía a Terraform que ese pool depende de que el cluster
+  termine de crearse. Un valor "armado bien" y un valor "con la
+  dependencia correcta" no son lo mismo.

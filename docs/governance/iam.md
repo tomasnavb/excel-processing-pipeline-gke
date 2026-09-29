@@ -42,8 +42,8 @@ account that doesn't exist yet fails outright (GCP returns `Permission
 denied ... or it may not exist` — a real error hit on the first apply, see
 the devlog). Membership follows the same ownership split as the roles
 below — whichever domain creates a given SA is responsible for adding it
-to its group, via a `data "google_cloud_identity_group"` lookup rather
-than re-declaring the group.
+to its group, via a `data "google_cloud_identity_group_lookup"` lookup
+rather than re-declaring the group.
 
 `registry-admins@` is not the same identity as `ci-cd-pipelines@`:
 `sa-terraform-deployer` (shared) runs Terraform to create the registry
@@ -62,7 +62,7 @@ the devlog for the full reasoning.
 
 Both SAs (`worker-gke-sa` and `keda-operator-sa`) are created by `gke`,
 and `gke` also adds each one to its own group (`gke-workloads-{env}@`,
-`keda-operators-{env}@`) via a `data "google_cloud_identity_group"`
+`keda-operators-{env}@`) via a `data "google_cloud_identity_group_lookup"`
 lookup — but that doesn't mean `gke` grants every role those groups end
 up with. See "Roles per group" below and the note in
 [`governance/iam.tf`](../../terraform/platform/governance/iam.tf) for
@@ -78,6 +78,9 @@ which roles `gke` grants directly versus which ones `data` grants instead.
 | `infra-admins-{env}@` | `roles/storage.admin` | Its own project | `terraform/platform/governance` |
 | `infra-admins-{env}@` | `roles/pubsub.admin` | Its own project | `terraform/platform/governance` |
 | `infra-admins-{env}@` | `roles/datastore.owner` | Its own project | `terraform/platform/governance` |
+| `infra-admins-{env}@` | `roles/iam.serviceAccountAdmin` | Its own project | `terraform/platform/governance` |
+| `infra-admins-{env}@` | `roles/resourcemanager.projectIamAdmin` | Its own project | `terraform/platform/governance` |
+| `infra-admins-{env}@` | `roles/iam.serviceAccountUser` | Its own project's default Compute Engine SA | `terraform/platform/governance` |
 | `gke-workloads-{env}@` | `roles/pubsub.subscriber` | The `excel-pipeline-jobs-sub-{env}` subscription | `terraform/domains/data` |
 | `gke-workloads-{env}@` | `roles/datastore.user` | Its own project (Firestore has no finer-grained IAM scope) | `terraform/domains/data` |
 | `gke-workloads-{env}@` | `roles/storage.objectAdmin` | The `excel-pipeline-{env}-jobs` bucket | `terraform/domains/data` |
@@ -91,6 +94,17 @@ which roles `gke` grants directly versus which ones `data` grants instead.
 | `registry-admins@` | `roles/iam.serviceAccountAdmin` | The `shared` project | `terraform/platform/governance` |
 | `keda-operators-{env}@` | `roles/monitoring.viewer` | Its own project (Cloud Monitoring has no finer-grained IAM scope) | `terraform/domains/gke` |
 | `keda-operators-{env}@` | `roles/pubsub.viewer` | The `excel-pipeline-jobs-sub-{env}` subscription | `terraform/domains/data` |
+
+`iam.serviceAccountAdmin`, `resourcemanager.projectIamAdmin`, and
+`iam.serviceAccountUser` were added after `gke`'s first real apply — until
+`gke`, no domain had ever created its own SAs or granted roles to its own
+groups, so `infra-admins-{env}@` never needed permission to do either.
+Creating a resource (`container.admin`, etc.) and editing who has access
+to the project itself are different permissions in GCP's model; the first
+two roles cover the latter. `serviceAccountUser`, scoped to the project's
+default Compute Engine SA specifically (not project-wide), is needed to
+create a GKE cluster that uses that SA for its nodes — see the devlog for
+the full apply-log trail.
 
 ## Why the split between `governance` and each domain
 
