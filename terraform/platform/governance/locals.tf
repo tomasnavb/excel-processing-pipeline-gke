@@ -58,6 +58,14 @@ locals {
 
   # infra-admins-{env}@ project-level roles — the only group whose bindings
   # governance owns directly, since governance is what creates the projects.
+  # groupsEditor/groupsViewer: experimental — testing whether ordinary
+  # Cloud IAM bindings can authorize sa-terraform-deployer-{env} to look up
+  # and manage Cloud Identity Group membership (gke/dev's
+  # data.google_cloud_identity_group_lookup + membership resources), or
+  # whether this still needs the Workspace Admin Console "Groups Admin"/
+  # "Groups Editor" role instead, same as governance-admin-sa needed (see
+  # the devlog, section 31). If the role name itself doesn't exist, this
+  # fails fast and clearly at apply time.
   infra_admin_roles = [
     "roles/container.admin",
     "roles/compute.networkAdmin",
@@ -65,6 +73,8 @@ locals {
     "roles/storage.admin",
     "roles/pubsub.admin",
     "roles/datastore.owner",
+    "roles/cloudidentity.groupsEditor",
+    "roles/cloudidentity.groupsViewer",
   ]
 
   infra_admin_bindings = {
