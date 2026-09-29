@@ -23,3 +23,26 @@ resource "tfe_project_variable_set" "shared_credentials" {
   project_id      = tfe_project.shared.id
   variable_set_id = tfe_variable_set.shared_credentials.id
 }
+
+# So domain workspaces that need the tfe provider (e.g. gke, reading
+# networking's tfe_outputs) inherit this without typing it in by hand —
+# same reasoning as project_id, and unlike project_id, hcp already has
+# this value directly (it's its own input variable) rather than needing
+# governance to compute it first. Same mechanism already used for
+# governance-mgmt itself, just broadcast via the project variable sets
+# instead of a single tfe_variable on one workspace.
+resource "tfe_variable" "hcp_organization_name" {
+  for_each = local.environments
+
+  key             = "hcp_organization_name"
+  value           = var.hcp_organization_name
+  category        = "terraform"
+  variable_set_id = tfe_variable_set.credentials[each.key].id
+}
+
+resource "tfe_variable" "hcp_organization_name_shared" {
+  key             = "hcp_organization_name"
+  value           = var.hcp_organization_name
+  category        = "terraform"
+  variable_set_id = tfe_variable_set.shared_credentials.id
+}
