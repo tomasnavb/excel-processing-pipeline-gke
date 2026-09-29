@@ -75,25 +75,6 @@ locals {
     }
   }
 
-  # Experimental, see iam.tf: roles/cloudidentity.groupsEditor/groupsViewer
-  # were rejected outright at the project level ("Role ... is not
-  # supported for this resource") — testing whether Organization-level
-  # binding is where Cloud IAM actually expects these, before concluding
-  # this product needs the Workspace Admin Console route instead (like
-  # governance-admin-sa did — see the devlog, section 31).
-  cloud_identity_group_roles = [
-    "roles/cloudidentity.groupsEditor",
-    "roles/cloudidentity.groupsViewer",
-  ]
-
-  cloud_identity_group_bindings = {
-    for pair in setproduct(["dev", "prod"], local.cloud_identity_group_roles) :
-    "${pair[0]}-${replace(pair[1], "/", "-")}" => {
-      environment = pair[0]
-      role        = pair[1]
-    }
-  }
-
   # dev, prod, and now shared (the registry domain's own deployer). The
   # infra-admins roles below stay on their own separate ["dev", "prod"]
   # literal, so extending this set doesn't cascade those 6 roles into

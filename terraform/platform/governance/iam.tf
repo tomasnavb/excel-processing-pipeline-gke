@@ -26,13 +26,3 @@ resource "google_project_iam_member" "registry_admins" {
 # no domain here represents Cloud Monitoring the way data represents
 # Firestore/Pub/Sub/GCS, so gke grants it directly, same as data already
 # does for gke-workloads-{env}@'s project-level roles (see the devlog).
-
-# Experimental — see locals.tf's cloud_identity_group_roles comment.
-# Organization-level, not project-level: that's what got rejected.
-resource "google_organization_iam_member" "infra_admins_cloud_identity" {
-  for_each = local.cloud_identity_group_bindings
-
-  org_id = data.google_organization.this.org_id
-  role   = each.value.role
-  member = "group:${module.per_env_groups["infra-admins-${each.value.environment}"].id}"
-}

@@ -930,7 +930,7 @@ crear una estructura paralela:
 
 Ambos applies (`hcp-mgmt` y `governance-mgmt`) corrieron sin errores nuevos.
 
-## 36. La conexión OAuth GitHub↔HCP Terraform se rompió sola, y una hipótesis descartada
+## 36. La conexión OAuth GitHub↔HCP Terraform se rompió sola, y una hipótesis descartada (dos veces)
 
 Al crear `tfe_workspace.registry` (sección 35), el apply falló con
 `"Repository doesn't exist or isn't accessible"` sobre el mismo repo que las
@@ -949,6 +949,18 @@ normal de token, sino una desconexión efectiva de la integración instalada.
 **Fix:** reinstalar/reautorizar la OAuth application desde el lado de HCP
 Terraform (Organization Settings → VCS Providers). Una vez reautorizada, el
 apply de `tfe_workspace.registry` funcionó sin cambiar nada del código.
+
+**Segunda ocurrencia, al crear `tfe_workspace.domain["gke-addons-dev"]`**
+(al separar la instalación de KEDA a su propio workspace): mismo error
+exacto, mismo mensaje. Esta vez, además de
+reautorizar la conexión, se generó un client secret nuevo del lado de
+GitHub — las dos cosas juntas, sin aislar cuál resolvió el problema
+realmente. El apply corrió bien después. Queda honestamente sin resolver
+*por qué* se repite (¿algo del lado de GitHub con apps OAuth de terceros?
+¿algo específico del free tier de HCP Terraform?) — no hay evidencia
+suficiente para afirmar una causa de fondo más precisa que "la conexión
+OAuth se desconecta sola de tanto en tanto". Runbook para la próxima vez:
+reautorizar la conexión y, si no alcanza, rotar el client secret también.
 
 ## 37. `self_link` vs `name` al referenciar la red desde `gke` — el motivo real es más acotado de lo esperado
 
@@ -1241,6 +1253,51 @@ es de naming sino de redacción — evitar usar "job" de forma ambigua en
 prosa cerca de la discusión de Kubernetes Job vs. Deployment (como en la
 sección 39), aclarando en esos casos puntuales a cuál de las dos cosas se
 refiere.
+
+## 43. Cloud Identity Groups y Cloud IAM: dos intentos más, mismo resultado que la sección 31
+
+Al aplicar `gke-dev`, `data.google_cloud_identity_group_lookup` (buscando
+`gke-workloads-dev@` para agregarle `worker-gke-sa` como miembro) falló con
+`403: Permission denied for resource gke-workloads-dev@... (or it may not
+exist)` — el mismo mensaje genérico que ya se había visto en la sección 31,
+ahora para `sa-terraform-deployer-dev` en vez de `governance-admin-sa`.
+
+Antes de asumir que hacía falta repetir el paso manual de Groups Admin, se
+probó explícitamente si esta vez alcanzaba con un binding de Cloud IAM
+normal — dos intentos, cada uno rechazado por un motivo distinto:
+
+**Intento 1 — `roles/cloudidentity.groupsEditor`/`groupsViewer` a nivel
+proyecto** (agregados a `infra_admin_roles`, junto a los otros 6 roles de
+`infra-admins-{env}@`): rechazado con
+`Role roles/cloudidentity.groupsViewer is not supported for this resource`
+(400 Bad Request). El rol existe como identificador válido — GCP lo
+rechaza puntualmente para bindear a un *proyecto*.
+
+**Intento 2 — los mismos roles, a nivel Organización**
+(`google_organization_iam_member`, mismo grupo como member): rechazado con
+`403: The caller does not have permission` al intentar **leer** la
+política de IAM de la Organización. Este error no es sobre el rol en
+absoluto — es sobre quién ejecuta este apply: `governance-admin-sa`, cuyos
+roles a nivel Organización son específicos y acotados
+(`folderCreator`, `projectCreator`, `billing.user`, otorgados a mano en la
+sección 18) — ninguno de ellos incluye administrar la política de IAM de
+la Organización en sí. Ampliarle ese permiso solo para probar la
+hipótesis hubiera sido una escalada de privilegios real sobre la
+identidad más sensible del proyecto, por una apuesta que ya venía débil
+tras el intento 1.
+
+**Conclusión, revertidos ambos intentos:** se confirma lo que la sección
+31 ya había encontrado para `governance-admin-sa`, ahora generalizado —
+Cloud Identity Groups no se gestiona vía bindings de Cloud IAM en este
+proyecto, sin importar el nivel de la jerarquía de recursos donde se
+intente. El único camino que funciona es el rol delegado del Admin
+Console de Google Workspace ("Groups Editor"), asignado directo a la
+identidad que necesita gestionar membership — y esto generaliza: **cada
+deployer SA de cada domain que toque Cloud Identity Groups** (no solo
+`governance-admin-sa`) va a necesitar este mismo paso manual repetido —
+algo que no se había anticipado como prerequisito al diseñar el patrón de
+"cada domain agrega sus propias SAs a los grupos que `governance` ya
+creó" (secciones 17, 32).
 
 ---
 
