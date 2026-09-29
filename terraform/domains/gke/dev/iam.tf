@@ -5,8 +5,8 @@ data "google_project" "this" {
 }
 
 resource "google_service_account" "this" {
-  for_each = local.identities
-
+  for_each     = local.identities
+  project      = var.project_id
   account_id   = each.value.account_id
   display_name = each.value.display_name
 }
