@@ -1,0 +1,57 @@
+name: Terraform CI
+
+# No GCP/HCP credentials anywhere here on purpose — fmt/validate/tflint
+# are all purely static checks. Real plans already run in HCP Terraform
+# itself on every push, via each workspace's own VCS trigger.
+on:
+  push:
+    paths:
+      - "terraform/**"
+  pull_request:
+    paths:
+      - "terraform/**"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+      - run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: terraform validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.0"
+      # Every directory containing at least one .tf file, root modules and
+      # terraform/modules/* alike — no hardcoded list to keep in sync as
+      # new domains/environments get added. -backend=false: none of these
+      # declare a backend block anyway (HCP Terraform's VCS-driven
+      # workspaces configure that externally), and validate never needs
+      # real provider credentials — only plan/apply do.
+      - name: Validate every Terraform directory
+        run: |
+          set -e
+          for dir in $(find terraform -name '*.tf' -exec dirname {} \; | sort -u); do
+            echo "== $dir =="
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+          done
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --init
+      - run: tflint --recursive
