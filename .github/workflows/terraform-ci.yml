@@ -20,7 +20,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.16.0"
-      - run: terraform fmt -check -recursive -diff
+      - run: terraform fmt -check -recursive -diff terraform/
 
   validate:
     name: terraform validate
@@ -54,4 +54,11 @@ jobs:
         with:
           tflint_version: latest
       - run: tflint --init
-      - run: tflint --recursive
+      # --recursive resolves a relative --config against each subdirectory
+      # it scans, not the original cwd — so cd into terraform/ first (a
+      # real shell cd, not --chdir: that flag can't be combined with
+      # --recursive) and point --config at .tflint.hcl's absolute path.
+      - name: Run tflint against terraform/
+        run: |
+          cd terraform
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
