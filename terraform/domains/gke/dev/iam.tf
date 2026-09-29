@@ -55,6 +55,14 @@ resource "google_service_account_iam_member" "ksa_binding" {
   service_account_id = google_service_account.this[each.key].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${each.value.namespace}/sa/${each.value.ksa_name}"
+
+  # The member string references the cluster's own Workload Identity Pool
+  # by its fixed, predictable name — not a real resource attribute — so
+  # nothing here otherwise tells Terraform this has to wait for the
+  # cluster to actually finish creating first. Without this, the binding
+  # can (and did) run in parallel with the cluster and fail because the
+  # pool doesn't exist yet.
+  depends_on = [module.gke_autopilot]
 }
 
 # The annotation that maps each KSA to its GSA lives in gke-addons (for

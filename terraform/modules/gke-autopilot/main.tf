@@ -66,4 +66,15 @@ resource "google_container_cluster" "autopilot" {
       enabled = local.ip_endpoints_enabled
     }
   }
+
+  # Autopilot enforces Workload Identity as a policy (pods can't opt out
+  # of it), but empirically that alone doesn't provision the identity
+  # pool itself — a first real apply failed with "Identity Pool does not
+  # exist (excel-pipeline-dev.svc.id.goog)" without this block declared
+  # explicitly. workload_pool's format is fixed by GCP's own convention
+  # ({project_id}.svc.id.goog), not something a caller of this module
+  # would ever need to vary.
+  workload_identity_config {
+    workload_pool = "${var.project_id}.svc.id.goog"
+  }
 }

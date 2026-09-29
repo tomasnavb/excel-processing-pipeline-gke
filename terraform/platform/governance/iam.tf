@@ -38,6 +38,6 @@ resource "google_service_account_iam_member" "infra_admins_default_compute_sa_us
   for_each = toset(["dev", "prod"])
 
   service_account_id = "projects/${google_project.this[each.key].project_id}/serviceAccounts/${google_project.this[each.key].number}-compute@developer.gserviceaccount.com"
-  role                = "roles/iam.serviceAccountUser"
-  member              = "group:${module.per_env_groups["infra-admins-${each.key}"].id}"
+  role               = "roles/iam.serviceAccountUser"
+  member             = "group:${module.per_env_groups["infra-admins-${each.key}"].id}"
 }
