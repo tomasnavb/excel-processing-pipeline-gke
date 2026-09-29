@@ -1,6 +1,6 @@
 locals {
   environments = toset(["dev", "prod"])
-  domains      = ["networking", "gke", "data", "cloud-run"]
+  domains      = ["networking", "gke", "gke-addons", "data", "cloud-run"]
 
   workspaces = {
     for pair in setproduct(local.environments, local.domains) :
