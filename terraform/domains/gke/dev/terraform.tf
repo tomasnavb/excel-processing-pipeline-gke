@@ -20,14 +20,5 @@ terraform {
       source  = "hashicorp/google-beta"
       version = "~> 7.0"
     }
-    # Kubernetes and Helm providers
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 3.2"
-    }
-    helm = {
-      source  = "hashicorp/helm"
-      version = "~> 3.3"
-    }
   }
 }

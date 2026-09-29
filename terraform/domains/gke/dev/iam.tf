@@ -57,25 +57,8 @@ resource "google_service_account_iam_member" "ksa_binding" {
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.project_id}.svc.id.goog/subject/ns/${each.value.namespace}/sa/${each.value.ksa_name}"
 }
 
-# keda-operator only — this patches an existing ServiceAccount object, and
-# the worker's KSA doesn't exist yet (it's created by Kustomize, a
-# separate deploy process this domain has no ordering relationship with).
-# keda-operator does exist within this same apply, created by
-# helm_release.keda below, so depends_on is required: metadata.name/
-# namespace are plain strings here, not a reference to that resource, so
-# nothing else would tell Terraform to wait for the chart to install first.
-resource "kubernetes_annotations" "gsa_binding" {
-  api_version = "v1"
-  kind        = "ServiceAccount"
-
-  metadata {
-    name      = local.identities.keda.ksa_name
-    namespace = local.identities.keda.namespace
-  }
-
-  annotations = {
-    "iam.gke.io/gcp-service-account" = google_service_account.this["keda"].email
-  }
-
-  depends_on = [helm_release.keda]
-}
+# The annotation that maps each KSA to its GSA lives in gke-addons (for
+# keda-operator) and will live in Kustomize (for the worker's own KSA) —
+# not here. This domain only grants the permission (above); it doesn't
+# touch the kubernetes provider at all anymore (see the devlog for why
+# that split happened).

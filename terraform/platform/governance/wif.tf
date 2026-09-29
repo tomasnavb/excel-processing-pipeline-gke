@@ -78,6 +78,6 @@ resource "google_service_account_iam_member" "deployer_wif" {
   for_each = local.deployer_environments
 
   service_account_id = google_service_account.deployer[each.key].name
-  role                = "roles/iam.workloadIdentityUser"
-  member              = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.deployer[each.key].name}/*"
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.deployer[each.key].name}/*"
 }
