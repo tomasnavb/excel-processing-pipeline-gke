@@ -157,15 +157,21 @@ domain workspaces share one per-project deployer identity (see
 
 ### In progress (as of 2026-09-30)
 
+Deliberately `dev`-only for now — the near-term goal is a minimum
+demonstrable pipeline that actually runs end-to-end in one environment,
+not a symmetric dev/prod buildout. `prod` gets mirrored once `dev`
+proves the design works, at which point it's mostly a known, mechanical
+repeat of the same domains rather than open design work.
+
 - [ ] `gke-addons`: KEDA's Helm install and its Workload Identity
       annotation haven't been confirmed on a clean end-to-end apply yet.
       The `ScaledObject`/`TriggerAuthentication` and the worker's own KSA
       are Kustomize's, not written yet.
-- [ ] Mirroring `gke`/`gke-addons`/`networking` into `prod` (`dev` only so
-      far).
 
 ### Next steps
 
+- [ ] Mirror `networking`/`gke`/`gke-addons` into `prod`, once `dev` runs
+      the pipeline end-to-end.
 - [ ] `terraform/domains/registry/shared`: the Artifact Registry repo, the
       Cloud Build ↔ GitHub connection (2nd-gen), and build triggers.
 - [ ] Resource-scoped IAM bindings (`gke-workloads`, `app-runtime`,
@@ -186,9 +192,10 @@ lives in [`docs/devlog/bitacora.md`](docs/devlog/bitacora.md) (in Spanish).
 ![Google Cloud](https://img.shields.io/badge/Google_Cloud-4285F4?logo=googlecloud&logoColor=white)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?logo=kubernetes&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-7B42BC?logo=terraform&logoColor=white)
+![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
 
 Google Cloud (Cloud Run, GKE Autopilot, Firestore, GCS, Pub/Sub, Cloud
-Monitoring, Cloud Identity/IAM) · Terraform + HCP Terraform · KEDA · Helm ·
-FastAPI · Docker · Kustomize
+Monitoring, Cloud Identity/IAM) · Terraform + HCP Terraform · GitHub Actions
+(`fmt`/`validate`/`tflint`) · KEDA · Helm · FastAPI · Docker · Kustomize
