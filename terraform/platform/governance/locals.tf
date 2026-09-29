@@ -138,12 +138,23 @@ locals {
   # APIs domain workspaces need enabled on their own project to create
   # resources — as opposed to wif.tf's iamcredentials/sts, which are
   # prerequisites of the WIF pool/provider defined there. Extend this list
-  # as new domains land (container.googleapis.com for gke,
-  # run.googleapis.com for cloud-run, pubsub.googleapis.com/
-  # firestore.googleapis.com for data) — no new resource block needed.
-  # monitoring.googleapis.com: needed by keda-operator-sa to read the
-  # Pub/Sub subscription's undelivered-message-count metric.
-  project_apis = ["compute.googleapis.com", "monitoring.googleapis.com"]
+  # as new domains land (run.googleapis.com for cloud-run,
+  # pubsub.googleapis.com/firestore.googleapis.com for data) — no new
+  # resource block needed.
+  # - compute.googleapis.com: networking's VPC/subnet.
+  # - monitoring.googleapis.com: keda-operator-sa reads the Pub/Sub
+  #   subscription's undelivered-message-count metric.
+  # - cloudresourcemanager.googleapis.com: gke's own data "google_project"
+  #   (reads the project number for the Workload Identity principal path).
+  # - container.googleapis.com: the google_container_cluster itself.
+  # All four follow the same quota-project logic: the caller
+  # (sa-terraform-deployer-{env}) lives in this same project.
+  project_apis = [
+    "compute.googleapis.com",
+    "monitoring.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "container.googleapis.com",
+  ]
 
   project_api_bindings = {
     for pair in setproduct(["dev", "prod"], local.project_apis) :
