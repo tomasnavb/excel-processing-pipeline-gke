@@ -58,6 +58,13 @@ locals {
 
   # infra-admins-{env}@ project-level roles — the only group whose bindings
   # governance owns directly, since governance is what creates the projects.
+  # serviceAccountAdmin/projectIamAdmin: needed once a domain starts
+  # creating its own SAs (gke's worker-gke-sa/keda-operator-sa) and
+  # granting roles to its own groups (gke's monitoring.viewer to
+  # keda-operators-{env}@) — two different capabilities from the
+  # resource-specific admin roles below: creating a resource is not the
+  # same permission as editing who has access to the project itself (see
+  # the devlog for the full reasoning).
   infra_admin_roles = [
     "roles/container.admin",
     "roles/compute.networkAdmin",
@@ -65,6 +72,8 @@ locals {
     "roles/storage.admin",
     "roles/pubsub.admin",
     "roles/datastore.owner",
+    "roles/iam.serviceAccountAdmin",
+    "roles/resourcemanager.projectIamAdmin",
   ]
 
   infra_admin_bindings = {

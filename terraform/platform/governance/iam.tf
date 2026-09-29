@@ -26,3 +26,18 @@ resource "google_project_iam_member" "registry_admins" {
 # no domain here represents Cloud Monitoring the way data represents
 # Firestore/Pub/Sub/GCS, so gke grants it directly, same as data already
 # does for gke-workloads-{env}@'s project-level roles (see the devlog).
+
+# infra-admins-{env}@ needs iam.serviceAccountUser on the project's own
+# default Compute Engine SA to create a GKE cluster that uses it for
+# nodes (GKE's default when no custom node SA is configured) — resource-
+# scoped, not project-level, so it can't just be a string in
+# infra_admin_roles like the roles above. Lives here, not in gke itself:
+# governance already has both the project number and the group as direct
+# resource references, no extra data lookup needed either way.
+resource "google_service_account_iam_member" "infra_admins_default_compute_sa_user" {
+  for_each = toset(["dev", "prod"])
+
+  service_account_id = "projects/${google_project.this[each.key].project_id}/serviceAccounts/${google_project.this[each.key].number}-compute@developer.gserviceaccount.com"
+  role                = "roles/iam.serviceAccountUser"
+  member              = "group:${module.per_env_groups["infra-admins-${each.key}"].id}"
+}
