@@ -37,3 +37,29 @@ module "vpc" {
     ]
   }
 }
+
+# subnet_private_access above only covers Google APIs (Firestore, GCS,
+# Artifact Registry, etc.) — nodes with enable_private_nodes still have no
+# route to the public internet at all without this, which is required for
+# anything pulling images from a registry outside Google (e.g. ghcr.io for
+# community Helm charts like KEDA's). A NAT is the standard way to give a
+# private node real (if address-translated) internet egress.
+resource "google_compute_router" "nat" {
+  name    = "excel-pipeline-router-dev"
+  project = var.project_id
+  region  = var.region
+  network = module.vpc.network_id
+}
+
+resource "google_compute_router_nat" "nat" {
+  name    = "excel-pipeline-nat-dev"
+  project = var.project_id
+  region  = var.region
+  router  = google_compute_router.nat.name
+
+  # Only one subnet exists here right now, so this and ALL_SUBNETWORKS_
+  # ALL_IP_RANGES are equivalent — used instead of naming the subnet
+  # explicitly so a future second subnet isn't silently excluded from NAT.
+  source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
+  nat_ip_allocate_option             = "AUTO_ONLY"
+}
