@@ -29,6 +29,7 @@ locals {
     infra-admins   = "sa-terraform-deployer"
     api-invokers   = "excel-client-sa"
     keda-operators = "keda-operator-sa"
+    gke-nodes      = "gke-node-sa"
   }
 
   per_env_groups = {
@@ -36,10 +37,10 @@ locals {
     "${pair[0]}-${pair[1]}" => {
       # Only infra-admins gets members here: sa-terraform-deployer is the
       # one SA governance itself creates (wif.tf). worker-gke-sa/
-      # api-runtime-sa/excel-client-sa/keda-operator-sa don't exist yet —
-      # the domain that creates each one (gke, cloud-run) is responsible
-      # for adding it to its own group, the same way domains own their
-      # resource-scoped IAM bindings instead of governance.
+      # api-runtime-sa/excel-client-sa/keda-operator-sa/gke-node-sa don't
+      # exist yet — the domain that creates each one (gke, cloud-run) is
+      # responsible for adding it to its own group, the same way domains
+      # own their resource-scoped IAM bindings instead of governance.
       members = pair[0] == "infra-admins" ? [
         # A resource reference, not a hand-built string — a literal string
         # here creates no dependency, so Terraform could (and did, once)
