@@ -1,5 +1,5 @@
 # Dedicated namespace for KEDA.
-resource "kubernetes_namespace" "keda" {
+resource "kubernetes_namespace_v1" "keda" {
   metadata {
     name = "keda"
   }
@@ -15,7 +15,7 @@ resource "helm_release" "keda" {
   repository = "https://kedacore.github.io/charts"
   chart      = "keda"
   version    = "2.20.2"
-  namespace  = kubernetes_namespace.keda.metadata[0].name
+  namespace  = kubernetes_namespace_v1.keda.metadata[0].name
 
   # Optional configurations
   set = [

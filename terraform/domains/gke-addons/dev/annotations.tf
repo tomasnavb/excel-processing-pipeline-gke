@@ -18,7 +18,7 @@ resource "kubernetes_annotations" "gsa_binding" {
 
   metadata {
     name      = "keda-operator"
-    namespace = kubernetes_namespace.keda.metadata[0].name
+    namespace = kubernetes_namespace_v1.keda.metadata[0].name
   }
 
   annotations = {
