@@ -42,3 +42,14 @@ variable "release_channel" {
   description = "GKE release channel (e.g. RAPID, REGULAR, STABLE) — left as a variable, not a fixed default, since dev/prod may deliberately want different channels (catch upgrade issues in dev before they reach prod)."
   type        = string
 }
+
+variable "node_service_account_id" {
+  description = "account_id for the custom node Service Account this module creates — replaces the default Compute Engine SA GKE would otherwise use for nodes. Defaults to this project's own naming convention; overridable in case a caller ever needs something else."
+  type        = string
+  default     = "gke-node-sa"
+}
+
+variable "node_group_email" {
+  description = "Email of the Cloud Identity group (created by governance) that the node Service Account is added to, and that receives roles/container.defaultNodeServiceAccount. Not defaulted — the group's domain/environment naming is the caller's concern, not this module's."
+  type        = string
+}

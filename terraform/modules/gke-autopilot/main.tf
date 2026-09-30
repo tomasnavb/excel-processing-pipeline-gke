@@ -22,6 +22,49 @@ locals {
   allow_external_traffic  = true
 }
 
+# Custom node Service Account, replacing the default Compute Engine SA
+# GKE otherwise falls back to — that one is shared project-wide and
+# historically over-privileged, a known GKE hardening gap. Created here
+# (not in the calling domain's own iam.tf) so every cluster this module
+# builds gets one automatically, without duplicating this across dev/prod.
+resource "google_service_account" "node" {
+  account_id   = var.node_service_account_id
+  project      = var.project_id
+  display_name = "Service Account for GKE Autopilot nodes"
+}
+
+# The group itself is created by governance (same single-source-of-truth
+# rule as every other Cloud Identity group in this project) — this module
+# only looks it up by the email the caller passes in, same as gke/dev
+# already does for gke-workloads-{env}@/keda-operators-{env}@.
+data "google_cloud_identity_group_lookup" "node" {
+  group_key {
+    id = var.node_group_email
+  }
+}
+
+resource "google_cloud_identity_group_membership" "node" {
+  group = data.google_cloud_identity_group_lookup.node.name
+
+  preferred_member_key {
+    id = google_service_account.node.email
+  }
+
+  roles {
+    name = "MEMBER"
+  }
+}
+
+# roles/container.defaultNodeServiceAccount is what actually lets this SA
+# function as a node identity (logging, monitoring, etc.) — granted to
+# the group, not the SA directly, following this project's own rule that
+# IAM grants always go through a Cloud Identity group.
+resource "google_project_iam_member" "node_default_service_account" {
+  project = var.project_id
+  role    = "roles/container.defaultNodeServiceAccount"
+  member  = "group:${var.node_group_email}"
+}
+
 resource "google_container_cluster" "autopilot" {
   name     = var.name
   project  = var.project_id
@@ -76,5 +119,17 @@ resource "google_container_cluster" "autopilot" {
   # would ever need to vary.
   workload_identity_config {
     workload_pool = "${var.project_id}.svc.id.goog"
+  }
+
+  # Without this, Autopilot falls back to the default Compute Engine SA
+  # for nodes — the exact identity this module's own google_service_account
+  # above exists to replace. enabled is optional as of a relatively recent
+  # provider fix (a prior version conflicted between cluster_autoscaling
+  # and enable_autopilot, blocking a custom node SA on Autopilot
+  # entirely — see the devlog).
+  cluster_autoscaling {
+    auto_provisioning_defaults {
+      service_account = google_service_account.node.email
+    }
   }
 }

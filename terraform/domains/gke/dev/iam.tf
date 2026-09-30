@@ -70,3 +70,16 @@ resource "google_service_account_iam_member" "ksa_binding" {
 # not here. This domain only grants the permission (above); it doesn't
 # touch the kubernetes provider at all anymore (see the devlog for why
 # that split happened).
+
+# infra-admins-dev@ needs to *use* the module's node Service Account to
+# create a cluster that assigns it to the nodes — this used to target the
+# default Compute Engine SA (in governance), now targets the custom SA
+# the module creates instead. Plain "group:email" string, same as every
+# other IAM policy binding in this file — no group lookup needed here,
+# that's only for google_cloud_identity_group_membership's `group`
+# argument (which wants the internal groups/xxx name, not the email).
+resource "google_service_account_iam_member" "node_sa_user" {
+  service_account_id = module.gke_autopilot.node_service_account_name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "group:infra-admins-dev@tomasnavarro.dev"
+}

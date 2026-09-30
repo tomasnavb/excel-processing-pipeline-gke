@@ -14,4 +14,5 @@ module "gke_autopilot" {
   services_range_name    = data.tfe_outputs.networking.values.services_range_name
   master_ipv4_cidr_block = "172.16.0.0/28"
   release_channel        = "REGULAR"
+  node_group_email       = "gke-nodes-dev@tomasnavarro.dev"
 }
