@@ -33,6 +33,8 @@ no dev/prod boundary to leak across.
 | `registry-admins@tomasnavarro.dev` | Creates and manages the shared registry domain's own resources | `sa-terraform-deployer` (shared project) |
 | `keda-operators-dev@tomasnavarro.dev` | KEDA's own operator — polls Cloud Monitoring to decide when to scale the worker Deployment — dev | *(empty — added by `terraform/domains/gke` when it creates `keda-operator-sa`)* |
 | `keda-operators-prod@tomasnavarro.dev` | Same, prod | *(empty — same, prod)* |
+| `gke-nodes-dev@tomasnavarro.dev` | The GKE cluster's own node Service Account (replaces the default Compute Engine SA nodes would otherwise use) — dev | *(empty — added by `terraform/modules/gke-autopilot` when it creates `gke-node-sa`)* |
+| `gke-nodes-prod@tomasnavarro.dev` | Same, prod | *(empty — same, prod)* |
 
 `infra-admins-{env}@` and `registry-admins@` are the only groups
 `governance` populates directly — both members are Terraform-deployer SAs
@@ -80,7 +82,7 @@ which roles `gke` grants directly versus which ones `data` grants instead.
 | `infra-admins-{env}@` | `roles/datastore.owner` | Its own project | `terraform/platform/governance` |
 | `infra-admins-{env}@` | `roles/iam.serviceAccountAdmin` | Its own project | `terraform/platform/governance` |
 | `infra-admins-{env}@` | `roles/resourcemanager.projectIamAdmin` | Its own project | `terraform/platform/governance` |
-| `infra-admins-{env}@` | `roles/iam.serviceAccountUser` | Its own project's default Compute Engine SA | `terraform/platform/governance` |
+| `infra-admins-{env}@` | `roles/iam.serviceAccountUser` | The `gke-node-sa` Service Account | `terraform/domains/gke` |
 | `gke-workloads-{env}@` | `roles/pubsub.subscriber` | The `excel-pipeline-jobs-sub-{env}` subscription | `terraform/domains/data` |
 | `gke-workloads-{env}@` | `roles/datastore.user` | Its own project (Firestore has no finer-grained IAM scope) | `terraform/domains/data` |
 | `gke-workloads-{env}@` | `roles/storage.objectAdmin` | The `excel-pipeline-{env}-jobs` bucket | `terraform/domains/data` |
@@ -94,17 +96,24 @@ which roles `gke` grants directly versus which ones `data` grants instead.
 | `registry-admins@` | `roles/iam.serviceAccountAdmin` | The `shared` project | `terraform/platform/governance` |
 | `keda-operators-{env}@` | `roles/monitoring.viewer` | Its own project (Cloud Monitoring has no finer-grained IAM scope) | `terraform/domains/gke` |
 | `keda-operators-{env}@` | `roles/pubsub.viewer` | The `excel-pipeline-jobs-sub-{env}` subscription | `terraform/domains/data` |
+| `gke-nodes-{env}@` | `roles/container.defaultNodeServiceAccount` | Its own project (no finer-grained scope) | `terraform/modules/gke-autopilot` |
 
-`iam.serviceAccountAdmin`, `resourcemanager.projectIamAdmin`, and
-`iam.serviceAccountUser` were added after `gke`'s first real apply — until
-`gke`, no domain had ever created its own SAs or granted roles to its own
-groups, so `infra-admins-{env}@` never needed permission to do either.
-Creating a resource (`container.admin`, etc.) and editing who has access
-to the project itself are different permissions in GCP's model; the first
-two roles cover the latter. `serviceAccountUser`, scoped to the project's
-default Compute Engine SA specifically (not project-wide), is needed to
-create a GKE cluster that uses that SA for its nodes — see the devlog for
-the full apply-log trail.
+`iam.serviceAccountAdmin` and `resourcemanager.projectIamAdmin` were added
+after `gke`'s first real apply — until `gke`, no domain had ever created
+its own SAs or granted roles to its own groups, so `infra-admins-{env}@`
+never needed permission to do either. Creating a resource
+(`container.admin`, etc.) and editing who has access to the project
+itself are different permissions in GCP's model; these two roles cover
+the latter.
+
+`infra-admins-{env}@`'s `serviceAccountUser` is a new variant of the
+ownership rule below: the *group* (`infra-admins-{env}@`) is governance's
+own, but the *role* targets a resource (`gke-node-sa`) that `gke` owns —
+so `gke` grants it, not `governance`, even though it's a governance group
+receiving it. This replaced an earlier version of the same binding that
+targeted the project's default Compute Engine SA instead, back when the
+cluster had no custom node SA of its own — see the devlog for the full
+apply-log trail on both.
 
 ## Why the split between `governance` and each domain
 
@@ -132,19 +141,22 @@ already in this table. See the devlog for the full correction.
 Image pulls on GKE nodes and Cloud Run don't use the workload identities
 above (`gke-workloads-{env}@`, `app-runtime-{env}@`) at all — image pulls
 happen at the node/kubelet level, before any pod's own Workload Identity
-context exists. For GKE Autopilot specifically, that identity is fixed and
-can't be overridden: the project's Compute Engine default service account
-(`{PROJECT_NUMBER}-compute@developer.gserviceaccount.com`). Cloud Run pulls
-via its own service agent, similarly unrelated to `app-runtime-{env}@`.
+context exists. On the GKE side, that identity is now `gke-node-sa`
+(`terraform/modules/gke-autopilot` — no longer the project's Compute
+Engine default SA, since the cluster stopped using it for nodes; see the
+devlog). Cloud Run pulls via its own service agent, unrelated to
+`app-runtime-{env}@`.
 
 Both need `roles/artifactregistry.reader` on `excel-pipeline-images` — a
 repo that lives in the `shared` project, not `dev`/`prod`. Following the
 same rule as the rest of this table (whoever owns the target resource
 grants access to it, regardless of which domain creates the consuming
 identity), this binding belongs to `terraform/domains/registry/shared`,
-not `gke`/`cloud-run`. The main open question for when that domain gets
-built: reaching dev/prod's Compute Engine default SA email requires their
-project *number* (not ID) from within `registry/shared`'s own Terraform —
-a cross-project value that governance already knows, so it's a candidate
-for the same variable-set channel already used for `project_id` (see the
-devlog), rather than `tfe_outputs`.
+not `gke`/`cloud-run`. Switching to a custom node SA actually simplifies
+this gap: `gke-node-sa`'s email is predictable
+(`gke-node-sa@excel-pipeline-{env}.iam.gserviceaccount.com`), unlike the
+default Compute Engine SA's, which needed the project *number* (not ID) —
+a cross-project value `registry/shared` would otherwise have had to get
+from `governance` somehow. Now it's just a string built from
+`project_id`, the same pattern already used everywhere else in this
+project for cross-project references.

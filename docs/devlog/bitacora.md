@@ -1485,6 +1485,75 @@ necesitado:**
 Con los cuatro resueltos, la creación de las SAs, el membership a los
 grupos, el `monitoring.viewer`, y el cluster en sí aplicaron correctamente.
 
+## 49. SA custom para los nodos, en vez de la default de Compute Engine
+
+Investigando el `google_service_account_iam_member` que le dimos a
+`infra-admins-{env}@` sobre la SA default de Compute (sección 48), surgió
+la pregunta de si esa SA en sí era la práctica correcta — GKE la usa por
+default para los nodos, pero es una identidad compartida a nivel proyecto
+e históricamente sobre-privilegiada, un anti-patrón de seguridad conocido.
+Se verificó una PR real de `magic-modules`
+(`GoogleCloudPlatform/magic-modules#6733`) que confirma el reemplazo
+correcto: una SA custom, asignada al cluster vía
+`cluster_autoscaling.auto_provisioning_defaults.service_account`, con el
+rol `roles/container.defaultNodeServiceAccount` (un rol predefinido que
+agrupa los permisos mínimos que un nodo necesita — logging, monitoring —
+en vez de armarlos a mano).
+
+**Dato no trivial encontrado en la misma PR:** hasta hace relativamente
+poco, el provider de Terraform tenía un conflicto real que impedía setear
+ese campo junto con `enable_autopilot = true` — no es que se hubiera
+pasado por alto, es que en versiones viejas del provider directamente no
+funcionaba para Autopilot.
+
+**Dos decisiones de diseño discutidas antes de escribir:**
+
+1. **¿Dónde se crea la SA?** Propuesta del usuario: adentro del módulo
+   `gke-autopilot` mismo, no en `gke/dev/iam.tf` — evita duplicar el
+   código entre `dev`/`prod`, y es coherente con que el módulo ya es "todo
+   lo necesario para un cluster Autopilot funcionando". Se aceptó sin
+   objeciones — el único ajuste fue no armar el email a mano
+   (`{account_id}@{project_id}...`), sino usar `.email` del resource real,
+   ya que la SA se crea en el mismo módulo.
+
+2. **¿Le ponemos grupo de Cloud Identity a esta SA?** Discutido en
+   profundidad, con argumentos genuinos de los dos lados:
+   - **A favor de saltearlo:** la SA es un singleton estructural — nunca
+     va a tener un segundo miembro, ningún humano necesita razonar sobre
+     "quién pertenece a este grupo". El grupo no aporta el beneficio real
+     de RBAC (razonar por rol, no por identidad) que sí aporta en los
+     demás casos.
+   - **A favor de mantenerlo:** la regla de "siempre vía grupos, nunca
+     directo a una SA" en `CLAUDE.md` es explícitamente absoluta, y parte
+     de por qué lo es: evita la erosión de a poco que empieza con "esta
+     excepción está bien justificada". Con el costo de agregar el grupo
+     siendo bajo (mismo mecanismo ya armado en `governance`), la regla sin
+     excepciones es un argumento más fuerte para un proyecto cuyo objetivo
+     explícito es demostrar ese patrón de RBAC.
+   
+   **Decisión: con grupo** (`gke-nodes-{env}@`), priorizando la
+   consistencia auditable sobre el ahorro marginal. Para no romper la
+   regla de "un solo lugar crea grupos", `governance` sigue siendo quien
+   crea `gke-nodes-{env}@` vacío (mismo mecanismo de `workload_sa_names`);
+   el módulo solo hace el lookup, la membership, y el rol al grupo.
+
+**Reubicación de un binding ya existente:** el
+`google_service_account_iam_member` de `serviceAccountUser` que la
+sección 48 había puesto en `governance` (apuntando a la SA default de
+Compute) se movió a `gke/dev/iam.tf`, apuntando ahora a la SA nueva — es
+un caso más de la regla ya establecida ("quien es dueño del recurso
+destino otorga el acceso"), con una variante nueva: el *grupo* que recibe
+el rol (`infra-admins-{env}@`) sigue siendo de `governance`, pero el
+*recurso* al que apunta el rol (`gke-node-sa`) lo crea `gke` — así que
+`gke` es quien lo otorga, no `governance`, aunque el grupo receptor no sea
+suyo.
+
+**Nota sobre quién escribió qué:** el usuario pidió explícitamente que
+esta vez se escribiera todo, incluido el bloque `cluster_autoscaling`
+dentro del recurso del cluster — territorio que el propio `CLAUDE.md`
+reserva para que lo escriba el usuario (config específica de GKE). Excepción
+consciente y señalada en el momento, no un desvío silencioso de la regla.
+
 ---
 
 ## Lecciones aprendidas
