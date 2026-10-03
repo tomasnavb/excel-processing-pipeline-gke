@@ -1554,6 +1554,68 @@ dentro del recurso del cluster — territorio que el propio `CLAUDE.md`
 reserva para que lo escriba el usuario (config específica de GKE). Excepción
 consciente y señalada en el momento, no un desvío silencioso de la regla.
 
+## 50. KEDA en `gke-addons/dev`: cinco problemas encadenados, y un namespace que no se podía borrar
+
+El primer despliegue de KEDA vía Helm (sección 45) falló en cadena: cada
+problema tapaba al siguiente. Se registran en el orden en que aparecieron.
+
+**1. Recurso deprecado.** `kubernetes_namespace` figuraba como deprecado en
+el provider; se migró a `kubernetes_namespace_v1`.
+
+**2. TLS contra el endpoint DNS-based.** Error:
+`x509: certificate signed by unknown authority`. El valor
+`master_auth[0].cluster_ca_certificate` es la CA privada del cluster, pensada
+para el endpoint IP clásico. Al pasarla, el provider reemplaza el trust store
+por defecto de Go y deja de confiar en la CA pública que firma el certificado
+del endpoint DNS. La solución fue no pasar `cluster_ca_certificate` en los
+providers `kubernetes` ni `helm`.
+
+**3. Nodos sin salida a internet.** Error: `dial tcp ... i/o timeout` al
+pullear `ghcr.io/kedacore/keda`. `subnet_private_access` solo habilita el
+acceso a APIs de Google; `ghcr.io` es un registro de terceros, así que ni
+Private Google Access ni el endpoint DNS lo cubren. Un nodo privado necesita
+Cloud NAT para salir a internet. Se agregaron Cloud Router y Cloud NAT en
+`networking/dev`, cubriendo también los rangos secundarios de pods y services.
+
+**4. Destroy colgado en un namespace que no termina de borrarse.** El destroy
+del state de `gke-addons-dev` terminó con `context deadline exceeded`, y el
+namespace `keda` quedó en `Terminating`. Leer `status.conditions` del namespace
+fue clave: todo el contenido ya estaba borrado (`ContentDeleted`,
+`ContentRemoved` y `ContentHasNoFinalizers` en `False`). La única condición
+bloqueante era `NamespaceDeletionDiscoveryFailure`: el namespace controller no
+puede completar el discovery de APIs porque el `APIService`
+`v1beta1.external.metrics.k8s.io` apuntaba al Service
+`keda-operator-metrics-apiserver` en el namespace `keda`, ya inexistente
+(`ServiceNotFound`).
+
+KEDA registra ese `APIService` a nivel cluster. Al borrar el namespace junto
+con su Service, el `APIService` quedó huérfano, y como es cluster-scoped no
+aparece en un listado de recursos `--namespaced`. La solución fue borrar el
+`APIService` huérfano; el namespace terminó de borrarse solo, sin forzar
+finalizers.
+
+**5. Re-apply sobre un namespace en terminación.** Con el namespace trabado,
+el apply siguiente falló al crear el Secret `sh.helm.release.v1.keda.v1`:
+`unable to create new content in namespace keda because it is being
+terminated`. Es consecuencia del punto 4, no un error independiente de Helm.
+
+Durante la investigación también se subió la versión del chart de KEDA de
+2.20.2 a 2.21.0 (commit `2705092`), como intento de descartar un bug de la
+versión anterior.
+
+**Lecciones de esta ronda:**
+- Antes de forzar nada sobre un namespace trabado, leer `status.conditions`:
+  dice exactamente qué bloquea. Acá el contenido ya estaba limpio, y el
+  bloqueo era un discovery roto, no datos colgados.
+- Los recursos cluster-scoped (`APIService`, CRDs, `ClusterRole`) no aparecen
+  en listados `--namespaced`. Un chequeo que solo mira el namespace no los ve.
+- Un release de Helm puede registrar recursos cluster-scoped que quedan fuera
+  del state de Terraform. Antes de destruir un release que instala
+  `APIService` o webhooks, conviene revisar cuáles creó.
+- Un error de Terraform puede ser síntoma de algo que vive en el cluster y no
+  en el state. El error del punto 5 parecía un problema de Helm, y era
+  consecuencia del punto 4.
+
 ---
 
 ## Lecciones aprendidas
