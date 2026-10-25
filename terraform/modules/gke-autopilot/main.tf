@@ -132,4 +132,6 @@ resource "google_container_cluster" "autopilot" {
       service_account = google_service_account.node.email
     }
   }
+
+  deletion_protection = false
 }
